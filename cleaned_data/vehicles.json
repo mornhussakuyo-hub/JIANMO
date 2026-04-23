@@ -1,0 +1,47 @@
+[
+  {
+    "k": 1,
+    "vehicle_type_id": "1",
+    "energy_type": "燃油",
+    "max_weight": 3000.0,
+    "max_volume": 13.5,
+    "available_count": 60,
+    "startup_cost": 400.0
+  },
+  {
+    "k": 2,
+    "vehicle_type_id": "2",
+    "energy_type": "燃油",
+    "max_weight": 1500.0,
+    "max_volume": 10.8,
+    "available_count": 50,
+    "startup_cost": 400.0
+  },
+  {
+    "k": 3,
+    "vehicle_type_id": "3",
+    "energy_type": "燃油",
+    "max_weight": 1250.0,
+    "max_volume": 6.5,
+    "available_count": 50,
+    "startup_cost": 400.0
+  },
+  {
+    "k": 4,
+    "vehicle_type_id": "4",
+    "energy_type": "新能源",
+    "max_weight": 3000.0,
+    "max_volume": 15.0,
+    "available_count": 10,
+    "startup_cost": 400.0
+  },
+  {
+    "k": 5,
+    "vehicle_type_id": "5",
+    "energy_type": "新能源",
+    "max_weight": 1250.0,
+    "max_volume": 8.5,
+    "available_count": 15,
+    "startup_cost": 400.0
+  }
+]

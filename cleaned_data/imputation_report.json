@@ -1,0 +1,287 @@
+{
+  "timestamp": "2026-04-23T19:30:40",
+  "customers_file_updated": "D:\\华中杯题目\\华中杯题目\\A题：城市绿色物流配送调度_1776844160973\\cleaned_data\\customers.json",
+  "backup_file": "D:\\华中杯题目\\华中杯题目\\A题：城市绿色物流配送调度_1776844160973\\cleaned_data\\customers_before_imputation.json",
+  "model_file": "D:\\华中杯题目\\华中杯题目\\A题：城市绿色物流配送调度_1776844160973\\cleaned_data\\order_weight_volume_linear_model.json",
+  "model_metrics": {
+    "volume_from_weight_r2": 0.9344622905902887,
+    "weight_from_volume_r2": 0.9344622905902887
+  },
+  "imputed_count": 30,
+  "skipped_count": 0,
+  "remaining_missing_count": 0,
+  "imputations": [
+    {
+      "guest_id": "4",
+      "order_id": "61",
+      "field": "volume",
+      "known_weight": 36.8,
+      "old_value": null,
+      "imputed_value": 0.137291,
+      "model": "volume = slope * weight + intercept"
+    },
+    {
+      "guest_id": "7",
+      "order_id": "75",
+      "field": "volume",
+      "known_weight": 97.835,
+      "old_value": null,
+      "imputed_value": 0.280352,
+      "model": "volume = slope * weight + intercept"
+    },
+    {
+      "guest_id": "8",
+      "order_id": "143",
+      "field": "weight",
+      "known_volume": 0.16,
+      "old_value": null,
+      "imputed_value": 52.075509,
+      "model": "weight = slope * volume + intercept"
+    },
+    {
+      "guest_id": "9",
+      "order_id": "194",
+      "field": "weight",
+      "known_volume": 0.0606,
+      "old_value": null,
+      "imputed_value": 12.44713,
+      "model": "weight = slope * volume + intercept"
+    },
+    {
+      "guest_id": "9",
+      "order_id": "260",
+      "field": "weight",
+      "known_volume": 0.1011,
+      "old_value": null,
+      "imputed_value": 28.593502,
+      "model": "weight = slope * volume + intercept"
+    },
+    {
+      "guest_id": "12",
+      "order_id": "223",
+      "field": "volume",
+      "known_weight": 47.672,
+      "old_value": null,
+      "imputed_value": 0.162774,
+      "model": "volume = slope * weight + intercept"
+    },
+    {
+      "guest_id": "41",
+      "order_id": "683",
+      "field": "volume",
+      "known_weight": 33.7892,
+      "old_value": null,
+      "imputed_value": 0.130234,
+      "model": "volume = slope * weight + intercept"
+    },
+    {
+      "guest_id": "42",
+      "order_id": "883",
+      "field": "weight",
+      "known_volume": 0.06638,
+      "old_value": null,
+      "imputed_value": 14.751477,
+      "model": "weight = slope * volume + intercept"
+    },
+    {
+      "guest_id": "42",
+      "order_id": "1539",
+      "field": "volume",
+      "known_weight": 127.674,
+      "old_value": null,
+      "imputed_value": 0.350292,
+      "model": "volume = slope * weight + intercept"
+    },
+    {
+      "guest_id": "47",
+      "order_id": "1625",
+      "field": "weight",
+      "known_volume": 0.04697,
+      "old_value": null,
+      "imputed_value": 7.013178,
+      "model": "weight = slope * volume + intercept"
+    },
+    {
+      "guest_id": "48",
+      "order_id": "357",
+      "field": "volume",
+      "known_weight": 959.6267,
+      "old_value": null,
+      "imputed_value": 2.300318,
+      "model": "volume = slope * weight + intercept"
+    },
+    {
+      "guest_id": "50",
+      "order_id": "1149",
+      "field": "volume",
+      "known_weight": 28.757,
+      "old_value": null,
+      "imputed_value": 0.118439,
+      "model": "volume = slope * weight + intercept"
+    },
+    {
+      "guest_id": "51",
+      "order_id": "1815",
+      "field": "weight",
+      "known_volume": 0.2029,
+      "old_value": null,
+      "imputed_value": 69.178703,
+      "model": "weight = slope * volume + intercept"
+    },
+    {
+      "guest_id": "51",
+      "order_id": "2166",
+      "field": "weight",
+      "known_volume": 0.03637,
+      "old_value": null,
+      "imputed_value": 2.787215,
+      "model": "weight = slope * volume + intercept"
+    },
+    {
+      "guest_id": "52",
+      "order_id": "1677",
+      "field": "volume",
+      "known_weight": 25.73,
+      "old_value": null,
+      "imputed_value": 0.111344,
+      "model": "volume = slope * weight + intercept"
+    },
+    {
+      "guest_id": "52",
+      "order_id": "2021",
+      "field": "weight",
+      "known_volume": 0.04952,
+      "old_value": null,
+      "imputed_value": 8.029802,
+      "model": "weight = slope * volume + intercept"
+    },
+    {
+      "guest_id": "54",
+      "order_id": "1474",
+      "field": "weight",
+      "known_volume": 0.03428,
+      "old_value": null,
+      "imputed_value": 1.953982,
+      "model": "weight = slope * volume + intercept"
+    },
+    {
+      "guest_id": "55",
+      "order_id": "563",
+      "field": "volume",
+      "known_weight": 433.7467,
+      "old_value": null,
+      "imputed_value": 1.0677,
+      "model": "volume = slope * weight + intercept"
+    },
+    {
+      "guest_id": "58",
+      "order_id": "1890",
+      "field": "volume",
+      "known_weight": 10.67,
+      "old_value": null,
+      "imputed_value": 0.076045,
+      "model": "volume = slope * weight + intercept"
+    },
+    {
+      "guest_id": "58",
+      "order_id": "1955",
+      "field": "volume",
+      "known_weight": 30.0,
+      "old_value": null,
+      "imputed_value": 0.121353,
+      "model": "volume = slope * weight + intercept"
+    },
+    {
+      "guest_id": "59",
+      "order_id": "1038",
+      "field": "weight",
+      "known_volume": 0.06469,
+      "old_value": null,
+      "imputed_value": 14.077714,
+      "model": "weight = slope * volume + intercept"
+    },
+    {
+      "guest_id": "61",
+      "order_id": "464",
+      "field": "volume",
+      "known_weight": 146.3168,
+      "old_value": null,
+      "imputed_value": 0.393989,
+      "model": "volume = slope * weight + intercept"
+    },
+    {
+      "guest_id": "62",
+      "order_id": "1337",
+      "field": "volume",
+      "known_weight": 13.15,
+      "old_value": null,
+      "imputed_value": 0.081858,
+      "model": "volume = slope * weight + intercept"
+    },
+    {
+      "guest_id": "64",
+      "order_id": "2093",
+      "field": "volume",
+      "known_weight": 44.986,
+      "old_value": null,
+      "imputed_value": 0.156478,
+      "model": "volume = slope * weight + intercept"
+    },
+    {
+      "guest_id": "65",
+      "order_id": "1721",
+      "field": "volume",
+      "known_weight": 1266.0502,
+      "old_value": null,
+      "imputed_value": 3.018549,
+      "model": "volume = slope * weight + intercept"
+    },
+    {
+      "guest_id": "66",
+      "order_id": "618",
+      "field": "weight",
+      "known_volume": 0.0952,
+      "old_value": null,
+      "imputed_value": 26.241314,
+      "model": "weight = slope * volume + intercept"
+    },
+    {
+      "guest_id": "67",
+      "order_id": "741",
+      "field": "weight",
+      "known_volume": 0.0674,
+      "old_value": null,
+      "imputed_value": 15.158126,
+      "model": "weight = slope * volume + intercept"
+    },
+    {
+      "guest_id": "73",
+      "order_id": "534",
+      "field": "weight",
+      "known_volume": 0.01714,
+      "old_value": null,
+      "imputed_value": 0.0,
+      "model": "weight = slope * volume + intercept"
+    },
+    {
+      "guest_id": "74",
+      "order_id": "1226",
+      "field": "weight",
+      "known_volume": 1.77711,
+      "old_value": null,
+      "imputed_value": 696.778204,
+      "model": "weight = slope * volume + intercept"
+    },
+    {
+      "guest_id": "76",
+      "order_id": "302",
+      "field": "volume",
+      "known_weight": 31.752,
+      "old_value": null,
+      "imputed_value": 0.125459,
+      "model": "volume = slope * weight + intercept"
+    }
+  ],
+  "skipped": [],
+  "remaining_missing": []
+}

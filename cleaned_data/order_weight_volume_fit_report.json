@@ -1,0 +1,39 @@
+{
+  "input": "D:\\华中杯题目\\华中杯题目\\A题：城市绿色物流配送调度_1776844160973\\cleaned_data\\customers.json",
+  "scatter_plot": "D:\\华中杯题目\\华中杯题目\\A题：城市绿色物流配送调度_1776844160973\\cleaned_data\\order_weight_volume_scatter.png",
+  "total_orders": 2169,
+  "valid_orders_for_plot": 2139,
+  "missing_or_non_numeric_orders": 30,
+  "weight": {
+    "min": 1.355,
+    "max": 5987.0501,
+    "mean": 131.73823806451614,
+    "median": 31.086
+  },
+  "volume": {
+    "min": 0.00841,
+    "max": 13.79751,
+    "mean": 0.3598182982702197,
+    "median": 0.1004
+  },
+  "fits": {
+    "linear": {
+      "formula": "volume = a * weight + b",
+      "a": 0.0023439149952689123,
+      "b": 0.05103506662049447,
+      "r2": 0.9344622905902887
+    },
+    "through_origin": {
+      "formula": "volume = a * weight",
+      "a": 0.00239720343629179,
+      "r2": 0.9309509907567513
+    },
+    "power": {
+      "formula": "volume = a * weight ** b",
+      "a": 0.004735761604078373,
+      "b": 0.894463517361425,
+      "r2": 0.9241785393709212
+    }
+  },
+  "suggestion": "Compare scatter shape and R2. If a strong near-linear relation is visible, volume can be imputed from weight, preferably with robust/outlier-aware fitting."
+}

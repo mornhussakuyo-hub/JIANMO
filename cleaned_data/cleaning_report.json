@@ -1,0 +1,28 @@
+{
+  "source_files": {
+    "distance_matrix": "D:\\华中杯题目\\华中杯题目\\A题：城市绿色物流配送调度_1776844160973\\附件\\距离矩阵.xlsx",
+    "coordinates": "D:\\华中杯题目\\华中杯题目\\A题：城市绿色物流配送调度_1776844160973\\附件\\客户坐标信息.xlsx",
+    "orders": "D:\\华中杯题目\\华中杯题目\\A题：城市绿色物流配送调度_1776844160973\\附件\\订单信息.xlsx",
+    "time_windows": "D:\\华中杯题目\\华中杯题目\\A题：城市绿色物流配送调度_1776844160973\\附件\\时间窗.xlsx"
+  },
+  "skipped_distance_rows": [],
+  "skipped_distance_cells": [],
+  "skipped_coordinate_rows": [],
+  "skipped_order_rows": [],
+  "notes": [
+    "Missing scalar values are written as null in JSON and empty cells in CSV.",
+    "Clearly unreasonable records, such as negative distances/weights/volumes or records without customer ids, are skipped.",
+    "The requested key name 'loaction' is preserved; a correctly spelled duplicate key 'location' is also included.",
+    "The problem statement says 30 customers are in the green area, but applying the stated radius-10-km rule to the coordinate file gives 15 customers. The JSON field if_in_green_area follows the coordinate rule."
+  ],
+  "summary": {
+    "distance_matrix_rows_written_including_header": 100,
+    "distance_matrix_columns_written": 100,
+    "customers_written": 98,
+    "orders_written": 2169,
+    "vehicle_types_written": 5,
+    "customers_in_green_area_by_coordinates": 15,
+    "green_area_radius_km": 10.0,
+    "problem_statement_green_customers": 30
+  }
+}

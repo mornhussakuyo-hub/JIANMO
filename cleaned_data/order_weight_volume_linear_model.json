@@ -1,0 +1,35 @@
+{
+  "model_type": "ordinary_least_squares_linear_regression",
+  "source_file": "D:\\华中杯题目\\华中杯题目\\A题：城市绿色物流配送调度_1776844160973\\cleaned_data\\customers.json",
+  "target_file": "D:\\华中杯题目\\华中杯题目\\A题：城市绿色物流配送调度_1776844160973\\cleaned_data\\order_weight_volume_linear_model.json",
+  "training_samples": 2139,
+  "volume_from_weight": {
+    "formula": "volume = slope * weight + intercept",
+    "slope": 0.0023439149952689123,
+    "intercept": 0.05103506662049447,
+    "r2": 0.9344622905902887,
+    "mae": 0.09566267035517423,
+    "rmse": 0.20476045113005112
+  },
+  "weight_from_volume": {
+    "formula": "weight = slope * volume + intercept",
+    "slope": 398.67584467715733,
+    "intercept": -11.712625928661065,
+    "r2": 0.9344622905902887,
+    "mae": 37.98566177971337,
+    "rmse": 84.44717203703061
+  },
+  "data_summary": {
+    "weight_min": 1.355,
+    "weight_max": 5987.0501,
+    "weight_mean": 131.73823806451614,
+    "volume_min": 0.00841,
+    "volume_max": 13.79751,
+    "volume_mean": 0.3598182982702197
+  },
+  "notes": [
+    "This is a simple OLS linear model trained on complete positive order records.",
+    "Predictions are clipped at 0 because negative weight or volume is physically invalid.",
+    "For imputing missing values, prefer this model only when the scatter plot supports an approximately linear relation."
+  ]
+}
