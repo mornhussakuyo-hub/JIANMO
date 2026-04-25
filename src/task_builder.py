@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
 from math import ceil
+import os
 
 from .log_utils import log
 from .model import Customer, ServiceUnit, VehicleType
@@ -22,6 +23,16 @@ class ServiceUnitBuilder:
 
     SAFE_VEHICLE_TYPE_ID = 2
     EPS = 1e-9
+
+    def __init__(
+        self,
+        mode: str | None = None,
+        target_weight: float | None = None,
+        target_volume: float | None = None,
+    ) -> None:
+        self.mode = mode or os.environ.get("Q1_SERVICE_UNIT_MODE", "customer_sliced")
+        self.target_weight = target_weight or float(os.environ.get("Q1_SERVICE_UNIT_TARGET_WEIGHT", "750.0"))
+        self.target_volume = target_volume or float(os.environ.get("Q1_SERVICE_UNIT_TARGET_VOLUME", "5.4"))
 
     def build_units(
         self,
@@ -46,7 +57,8 @@ class ServiceUnitBuilder:
         customers = list(customers)
         log(
             f"ServiceUnitBuilder 启动: 客户 {len(customers)} 个, "
-            f"安全容量 {safe_weight:.1f}kg/{safe_volume:.1f}m3",
+            f"模式 {self.mode}, 安全容量 {safe_weight:.1f}kg/{safe_volume:.1f}m3, "
+            f"目标切片 {self.target_weight:.1f}kg/{self.target_volume:.1f}m3",
             indent=2,
         )
 
@@ -96,6 +108,17 @@ class ServiceUnitBuilder:
         """
         if customer.demand_weight <= 0 and customer.demand_volume <= 0:
             return []
+
+        if self.mode == "customer_sliced":
+            return self._slice_aggregate_customer(
+                customer=customer,
+                vehicle_types=vehicle_types,
+                target_weight=self.target_weight,
+                target_volume=self.target_volume,
+            )
+
+        if self.mode != "order_bfd":
+            raise ValueError(f"未知 ServiceUnit 构造模式: {self.mode}")
 
         orders = customer.raw_orders or []
 
@@ -399,6 +422,63 @@ class ServiceUnitBuilder:
 
         self._check_customer_total_preserved(customer=customer, units=service_units)
         return service_units
+
+    def _slice_aggregate_customer(
+        self,
+        customer: Customer,
+        vehicle_types: Sequence[VehicleType],
+        target_weight: float,
+        target_volume: float,
+    ) -> list[ServiceUnit]:
+        """
+        客户层等比例切片。
+
+        这更贴近数学模型里的客户层 split delivery：
+        不再把原始订单当作不可拆单元，而是把客户总需求按重量/体积同比例切成
+        若干 ServiceUnit，最终仍可聚合回客户层服务比例。
+        """
+
+        total_weight = customer.demand_weight
+        total_volume = customer.demand_volume
+        if total_weight <= 0 and total_volume <= 0:
+            return []
+
+        if target_weight <= 0 or target_volume <= 0:
+            raise ValueError("customer_sliced 模式的 target_weight/target_volume 必须为正。")
+
+        piece_count = max(
+            1,
+            ceil(total_weight / target_weight) if total_weight > 0 else 1,
+            ceil(total_volume / target_volume) if total_volume > 0 else 1,
+        )
+
+        while True:
+            unit_weight = total_weight / piece_count
+            unit_volume = total_volume / piece_count
+            if self._can_any_vehicle_carry(unit_weight, unit_volume, vehicle_types):
+                break
+            piece_count += 1
+
+        units: list[ServiceUnit] = []
+        unit_weight = total_weight / piece_count
+        unit_volume = total_volume / piece_count
+        source_ids = [str(order["order_id"]) for order in (customer.raw_orders or [])]
+
+        for index in range(1, piece_count + 1):
+            units.append(
+                ServiceUnit(
+                    unit_id=f"C{customer.customer_id:03d}_S{index:03d}_OF_{piece_count:03d}",
+                    customer_id=customer.customer_id,
+                    weight=unit_weight,
+                    volume=unit_volume,
+                    time_window=customer.time_window,
+                    is_green=customer.is_green,
+                    source_order_ids=source_ids,
+                )
+            )
+
+        self._check_customer_total_preserved(customer=customer, units=units)
+        return units
 
     def _can_any_vehicle_carry(
         self,

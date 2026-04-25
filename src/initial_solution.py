@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from collections.abc import Sequence
 from math import atan2, cos, sin
 
@@ -221,15 +222,24 @@ class InitialSolutionBuilder:
             *self.giant_tour_builder.build_tour_pool(service_units),
         ]
         log(f"初始解候选顺序数量: {len(candidate_orders)}", indent=2)
+        skip_insertion_threshold = int(os.environ.get("Q1_SKIP_INSERTION_WHEN_UNITS_GT", "300"))
+        skip_insertion = len(service_units) > skip_insertion_threshold
+        if skip_insertion:
+            log(
+                f"ServiceUnit 数量 {len(service_units)} > {skip_insertion_threshold}，"
+                "跳过顺序插入候选，仅运行 Giant Tour + Split DP",
+                indent=2,
+            )
 
         best_solution: Solution | None = None
         for name, ordered_units in candidate_orders:
-            log(f"候选 {name}: 开始顺序插入构造", indent=2)
-            insertion_solution = self._build_from_order(ordered_units, vehicles)
-            self._log_solution_summary(f"{name} / insertion", insertion_solution, indent=3)
-            if best_solution is None or self._solution_rank(insertion_solution) < self._solution_rank(best_solution):
-                best_solution = insertion_solution
-                log(f"当前最优更新为: {name} / insertion", indent=3)
+            if not skip_insertion:
+                log(f"候选 {name}: 开始顺序插入构造", indent=2)
+                insertion_solution = self._build_from_order(ordered_units, vehicles)
+                self._log_solution_summary(f"{name} / insertion", insertion_solution, indent=3)
+                if best_solution is None or self._solution_rank(insertion_solution) < self._solution_rank(best_solution):
+                    best_solution = insertion_solution
+                    log(f"当前最优更新为: {name} / insertion", indent=3)
 
             if name != "hardness_sorted":
                 log(f"候选 {name}: 开始 Split DP 切分构造", indent=2)

@@ -110,7 +110,7 @@ class TestDataLoader(unittest.TestCase):
 
 class TestServiceUnitBuilder(unittest.TestCase):
     def setUp(self) -> None:
-        self.builder = ServiceUnitBuilder()
+        self.builder = ServiceUnitBuilder(mode="order_bfd")
 
     def test_small_customer_orders_are_merged_into_one_unit(self) -> None:
         customer = Customer(
