@@ -127,7 +127,7 @@ def assign_reusable_vehicle_schedules(
         chosen_vehicle: VehicleInstance | None = None
         chosen_eval: RouteEvaluation | None = None
         chosen_departure_min: int | None = None
-        chosen_score: tuple[int, float, float, int, int, str] | None = None
+        chosen_score: tuple[float, float, float, int, int, str] | None = None
         departure_candidates = _departure_candidates_for_schedule(route, route_evaluator)
 
         for vehicle in compatible_vehicles:
@@ -150,12 +150,19 @@ def assign_reusable_vehicle_schedules(
                 ):
                     continue
 
-                already_used = 0 if schedules[vehicle.vehicle_id] else 1
+                is_new_vehicle = not schedules[vehicle.vehicle_id]
+                startup_delta = vehicle.vehicle_type.startup_cost if is_new_vehicle else 0.0
+                variable_cost = (
+                    evaluation.cost.energy_cost
+                    + evaluation.cost.carbon_cost
+                    + evaluation.cost.waiting_cost
+                    + evaluation.cost.late_cost
+                )
                 latest_finish = max((end for _, end in schedules[vehicle.vehicle_id]), default=0.0)
                 score = (
-                    already_used,
-                    latest_finish,
+                    variable_cost + startup_delta,
                     evaluation.cost.total_cost,
+                    latest_finish,
                     abs(departure_min - route.departure_min),
                     vehicle.vehicle_type.type_id,
                     vehicle.vehicle_id,
