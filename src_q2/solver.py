@@ -28,7 +28,7 @@ class Q2SolveResult:
 
 
 class Q2Solver:
-    """Q2 总调度器：在 Q1 求解链上加入绿色准入硬约束。"""
+    """Q2 总调度器：复用基线求解链并加入绿色准入硬约束。"""
 
     def __init__(
         self,

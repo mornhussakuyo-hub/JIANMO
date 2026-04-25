@@ -210,7 +210,7 @@ class GiantTourBuilder:
 
 
 class InitialSolutionBuilder:
-    """构造 Q1 的稳定初始解：排序 + 最佳插入 + 必要时开新车。"""
+    """构造 Q2 稳定初始解：排序插入 + Giant Tour + Split DP 多候选择优。"""
 
     def __init__(self, route_evaluator: RouteEvaluator) -> None:
         self.route_evaluator = route_evaluator

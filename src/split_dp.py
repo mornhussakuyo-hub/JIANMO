@@ -562,7 +562,7 @@ class SplitDPBuilder:
         """
         识别大车车型。
 
-        当前 Q1 数据中，车型 1/4 是 3000kg 级大车。这里不硬编码车型号，
+        当前 cleaned_data 中，车型 1/4 是 3000kg 级大车。这里不硬编码车型号，
         而是用车型二安全容量 1500kg / 10.8m3 作为普通车边界。
         """
 
@@ -574,7 +574,7 @@ class SplitDPBuilder:
         return large_type_ids
 
     def _small_vehicle_type_ids(self, vehicles_by_type: dict[int, list[VehicleInstance]]) -> set[int]:
-        """识别小车车型，当前 Q1 数据中对应 1250kg / 8.5m3 及以下车辆。"""
+        """识别小车车型，当前 cleaned_data 中对应 1250kg / 8.5m3 及以下车辆。"""
 
         small_type_ids: set[int] = set()
         for vehicle_type_id, vehicles in vehicles_by_type.items():

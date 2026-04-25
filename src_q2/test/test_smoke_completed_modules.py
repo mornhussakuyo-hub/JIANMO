@@ -4,15 +4,15 @@ import importlib
 import unittest
 from pathlib import Path
 
-from src.constants import Q1Constants
-from src.costs import ArcCostCalculator
-from src.data_loader import Q1DataLoader
-from src.initial_solution import GiantTourBuilder
-from src.model import Customer, Route, RouteStop, ServiceUnit, TimeWindow, VehicleInstance, VehicleType
-from src.route_evaluator import RouteEvaluator
-from src.split_dp import SplitDPBuilder
-from src.task_builder import ServiceUnitBuilder
-from src.traffic import TrafficProfile
+from src_q2.constants import Q1Constants
+from src_q2.costs import ArcCostCalculator
+from src_q2.data_loader import Q1DataLoader
+from src_q2.initial_solution import GiantTourBuilder
+from src_q2.model import Customer, Route, RouteStop, ServiceUnit, TimeWindow, VehicleInstance, VehicleType
+from src_q2.route_evaluator import RouteEvaluator
+from src_q2.split_dp import SplitDPBuilder
+from src_q2.task_builder import ServiceUnitBuilder
+from src_q2.traffic import TrafficProfile
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -20,19 +20,19 @@ DATA_DIR = REPO_ROOT / "cleaned_data"
 
 
 class TestModuleImports(unittest.TestCase):
-    def test_all_src_modules_can_be_imported(self) -> None:
+    def test_all_src_q2_modules_can_be_imported(self) -> None:
         module_names = [
-            "src.constants",
-            "src.costs",
-            "src.data_loader",
-            "src.initial_solution",
-            "src.local_search",
-            "src.model",
-            "src.reporting",
-            "src.route_evaluator",
-            "src.solver",
-            "src.task_builder",
-            "src.traffic",
+            "src_q2.constants",
+            "src_q2.costs",
+            "src_q2.data_loader",
+            "src_q2.initial_solution",
+            "src_q2.local_search",
+            "src_q2.model",
+            "src_q2.reporting",
+            "src_q2.route_evaluator",
+            "src_q2.solver",
+            "src_q2.task_builder",
+            "src_q2.traffic",
         ]
 
         for module_name in module_names:

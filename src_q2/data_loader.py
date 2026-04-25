@@ -10,7 +10,7 @@ from .model import Customer, DistanceMatrix, Q1InputData, TimeWindow, VehicleIns
 
 
 class Q1DataLoader:
-    """读取 cleaned_data 下的 Q1 输入文件，并转成程序内部对象。"""
+    """读取 Q1/Q2 共用的 cleaned_data 输入文件，并转成程序内部对象。"""
 
     def __init__(self, data_dir: Path, constants: Q1Constants | None = None) -> None:
         self.data_dir = data_dir
@@ -18,14 +18,14 @@ class Q1DataLoader:
 
     def load(self) -> Q1InputData:
         """
-        一次性加载 Q1 所有输入。
+        一次性加载调度求解需要的基础输入。
 
         读取内容包括：
         1. customers.json
         2. vehicles.json
         3. distance_matrix.csv
 
-        返回统一的 Q1InputData 对象。
+        返回统一的 Q1InputData 对象；类名沿用 Q1，Q2 继续复用该数据结构。
         """
 
         customers = self.load_customers()
@@ -73,7 +73,7 @@ class Q1DataLoader:
 
             time_window = self._parse_customer_time_window(row)
             
-            #由于数据清洗阶段的误拼写，此处读取 location 和 loaction
+            # 兼容数据清洗阶段的字段误拼写：location / loaction。
             location = row.get("location") or row.get("loaction") or {}
             customers[customer_id] = Customer(
                 customer_id=customer_id,
@@ -197,7 +197,7 @@ class Q1DataLoader:
         """
         根据当前数据计算规划时域上界和 Big-M。
 
-        这里采用一个简单粗略、适合第一版程序的实现：
+        这里采用保守的运行时边界估计：
 
         1. 找到所有客户中最晚的时间窗结束时刻
         2. 加上固定服务时间 20 分钟
@@ -214,19 +214,19 @@ class Q1DataLoader:
 
         service_time = self.constants.service_time_min
 
-        # 给一个固定返仓缓冲，不再按最慢速度精算
+        # 给一个固定返仓缓冲，不按最慢速度逐弧精算。
         return_buffer_min = 120
 
         planning_horizon_min = latest_window_end + service_time + return_buffer_min
 
-        # 最晚只允许到当天 24:00
+        # 最晚只允许到当天 24:00。
         end_of_day_min = 24 * 60
         planning_horizon_min = min(planning_horizon_min, end_of_day_min)
 
-        # Big-M 只要明显大于规划时域即可，不必特别夸张
+        # Big-M 只要明显大于规划时域即可，避免过度放大。
         big_m_time_min = planning_horizon_min + 180
 
-        # 顺序 Big-M 直接取正需求客户数
+        # 顺序 Big-M 直接取正需求客户数。
         big_m_order = len(input_data.customers)
 
         return RuntimeBounds(
@@ -271,9 +271,9 @@ class Q1DataLoader:
         distance_matrix: DistanceMatrix,
     ) -> None:
         """
-        校验距离矩阵是否覆盖 Q1 需要的所有节点。
+        校验距离矩阵是否覆盖调度求解需要的所有节点。
 
-        Q1 至少需要：
+        至少需要：
         1. 仓库节点 0
         2. 所有正需求客户节点
         """

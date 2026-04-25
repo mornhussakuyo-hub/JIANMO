@@ -8,11 +8,11 @@ from .traffic import TrafficProfile
 
 class RouteEvaluator:
     """
-    Q1 的核心模块：路线评价器。
+    Q2 路线评价器。
 
     它的职责是：
     1. 对一条完整路线做精确成本计算
-    2. 做容量、时间、返仓等一致性检查
+    2. 做容量、时间、返仓和绿色准入等一致性检查
     3. 给初始解构造和局部搜索提供统一的“打分器”
     """
 
@@ -170,14 +170,14 @@ class RouteEvaluator:
                     f"[{self.green_policy_start_min}, {self.green_policy_end_min})"
                 )
 
-            #若早到则产生等待
+            # 早到产生等待成本。
             service_start_min = max(arrival_min,float(customer.time_window.start_min))
             waiting_minutes = max(0.0,float(customer.time_window.start_min)-arrival_min)
 
-            #若晚到则产生惩罚
+            # 晚到产生迟到惩罚成本。
             late_minutes = max(0.0, arrival_min - float(customer.time_window.end_min))
 
-            #服务结束时刻 = 开始服务时刻 + 固定服务时间
+            # 服务结束时刻 = 开始服务时刻 + 固定服务时间。
             leave_min = service_start_min +self.constants.service_time_min
 
             cost.energy_cost += arc_result.energy_cost

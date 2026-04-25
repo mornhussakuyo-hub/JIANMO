@@ -8,7 +8,7 @@ from .traffic import TrafficProfile
 
 class RouteEvaluator:
     """
-    Q1 的核心模块：路线评价器。
+    Q1 路线评价器。
 
     它的职责是：
     1. 对一条完整路线做精确成本计算

@@ -34,7 +34,7 @@ class InsertionMove:
 
 
 class LocalSearchEngine:
-    """Q1 ALNS 主搜索器。最终精修/VND 暂不在这里实现。"""
+    """Q2 ALNS 主搜索器，复用 Q1 搜索框架并接受绿色准入可行性检查。"""
 
     DEFAULT_ITERATIONS = 12
     DEFAULT_DESTROY_MIN_RATIO = 0.03
@@ -227,13 +227,13 @@ class LocalSearchEngine:
         return best
 
     def try_relocate(self, solution: Solution) -> bool:
-        """公开接口：执行一轮轻量 relocate。当前稳定版先返回 False。"""
+        """公开接口：执行一轮轻量 relocate。当前版本只刷新解并返回 False。"""
 
         self._refresh_solution(solution)
         return False
 
     def try_swap(self, solution: Solution) -> bool:
-        """公开接口：执行一轮轻量 swap。当前稳定版先返回 False。"""
+        """公开接口：执行一轮轻量 swap。当前版本只刷新解并返回 False。"""
 
         self._refresh_solution(solution)
         return False

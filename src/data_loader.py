@@ -197,7 +197,7 @@ class Q1DataLoader:
         """
         根据当前数据计算规划时域上界和 Big-M。
 
-        这里采用一个简单粗略、适合第一版程序的实现：
+        这里采用保守的运行时边界估计：
 
         1. 找到所有客户中最晚的时间窗结束时刻
         2. 加上固定服务时间 20 分钟
@@ -214,19 +214,19 @@ class Q1DataLoader:
 
         service_time = self.constants.service_time_min
 
-        # 给一个固定返仓缓冲，不再按最慢速度精算
+        # 给一个固定返仓缓冲，不按最慢速度逐弧精算。
         return_buffer_min = 120
 
         planning_horizon_min = latest_window_end + service_time + return_buffer_min
 
-        # 最晚只允许到当天 24:00
+        # 最晚只允许到当天 24:00。
         end_of_day_min = 24 * 60
         planning_horizon_min = min(planning_horizon_min, end_of_day_min)
 
-        # Big-M 只要明显大于规划时域即可，不必特别夸张
+        # Big-M 只要明显大于规划时域即可，避免过度放大。
         big_m_time_min = planning_horizon_min + 180
 
-        # 顺序 Big-M 直接取正需求客户数
+        # 顺序 Big-M 直接取正需求客户数。
         big_m_order = len(input_data.customers)
 
         return RuntimeBounds(

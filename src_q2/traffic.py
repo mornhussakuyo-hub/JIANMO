@@ -5,7 +5,7 @@ from .model import TravelSegmentRecord
 
 
 class TrafficProfile:
-    """Q1 的时变速度模型。"""
+    """Q1/Q2 共用的时变速度模型。"""
 
     def __init__(self, constants: Q1Constants | None = None) -> None:
         self.constants = constants or Q1Constants()
@@ -50,7 +50,7 @@ class TrafficProfile:
         """
         把一条弧按交通时段切成多个片段。
 
-        推荐实现步骤：
+        计算过程：
         1. 初始化剩余距离 `remaining_distance = distance_km`
         2. 当前时间从 `depart_min` 开始
         3. 判断当前属于哪个时段，该时段还能走多久
@@ -145,6 +145,5 @@ class TrafficProfile:
         """
         segments = self.travel_segments(distance_km=distance_km,depart_min=depart_min)
         return sum(segment.end_min - segment.start_min   for segment in segments)
-
 
 

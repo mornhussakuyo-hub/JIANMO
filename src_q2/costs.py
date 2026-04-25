@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from .constants import Q1Constants
-from .model import ArcCostResult, TravelSegmentRecord, VehicleInstance,VehicleType
+from .model import ArcCostResult, TravelSegmentRecord, VehicleInstance, VehicleType
 
 
 class ArcCostCalculator:
@@ -32,7 +32,7 @@ class ArcCostCalculator:
         """
         根据剩余载重计算载重修正因子。
 
-        你需要在这里做的事情：
+        计算规则：
         1. 用 `remaining_weight / 车辆最大载重` 得到装载率。
         2. 把装载率裁剪到 [0, 1]，避免由于浮点误差或中间状态出现异常值。
         3. 如果是燃油车，用 `1 + 0.4 * 装载率`。
@@ -63,7 +63,7 @@ class ArcCostCalculator:
         """
         计算一整条弧上的成本。
 
-        这里建议按下面顺序实现：
+        累计过程：
         1. 先根据 `remaining_weight` 算出载重修正因子。
         2. 对弧上的每个交通时段片段分别计算：
            - 该片段速度下的百公里能耗
@@ -72,7 +72,7 @@ class ArcCostCalculator:
            - 该片段碳排放量
            - 该片段碳成本
         3. 把所有片段累加成一个 `ArcCostResult`。
-        4. travel_minutes 可以直接由所有片段时长求和得到。
+        4. travel_minutes 直接由所有片段时长求和得到。
         """
         factor = self.load_factor(vehicle=vehicle,remaining_weight=remaining_weight)
 
@@ -134,6 +134,5 @@ class ArcCostCalculator:
         """把迟到分钟数换算成迟到惩罚成本。"""
 
         return late_minutes / self.constants.hour_to_min * self.constants.late_cost_per_hour
-
 
 

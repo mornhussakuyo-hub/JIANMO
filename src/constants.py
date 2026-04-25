@@ -20,8 +20,8 @@ class Q1Constants:
 
     注意：
     这里放的是建模手已经定死的常量。
-    像正需求客户数、Big-M、规划时域上界这类量，不应该硬编码在这里，
-    而应该在读取数据后运行时计算。
+    正需求客户数、Big-M、规划时域上界这类量由数据读取后运行时计算，
+    不在常量表中硬编码。
     """
 
     time_origin: str = "08:00"
@@ -91,4 +91,3 @@ class RuntimeBounds:
     planning_horizon_min: int
     big_m_time_min: int
     big_m_order: int
-

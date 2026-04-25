@@ -16,12 +16,13 @@ class SpeedSegment:
 @dataclass(slots=True)
 class Q1Constants:
     """
-    Q1 固定常量。
+    Q1/Q2 共用固定常量。
 
     注意：
-    这里放的是建模手已经定死的常量。
-    像正需求客户数、Big-M、规划时域上界这类量，不应该硬编码在这里，
-    而应该在读取数据后运行时计算。
+    这里放的是建模阶段已经固定的参数。
+    正需求客户数、Big-M、规划时域上界这类量由数据读取后运行时计算，
+    不在常量表中硬编码。
+    类名保留 Q1Constants，是为了让 Q2 复用 Q1 的算法接口。
     """
 
     time_origin: str = "08:00"
@@ -91,4 +92,3 @@ class RuntimeBounds:
     planning_horizon_min: int
     big_m_time_min: int
     big_m_order: int
-

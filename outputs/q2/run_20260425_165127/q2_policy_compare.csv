@@ -1,0 +1,2 @@
+﻿q1_reference_json,q2_total_cost,q1_total_cost,delta_total_cost,delta_distance_km,delta_route_count,delta_used_vehicle_count,delta_energy_cost,delta_carbon_cost,delta_wait_cost,delta_late_cost,delta_late_stop_count,green_violation_count,green_fuel_service_count,green_new_energy_service_count
+D:\华中杯题目\华中杯题目\A题：城市绿色物流配送调度_1776844160973\outputs\q1\run_20260425_153435\q1_solution.json,51522.928435,49261.908971,2261.019464,110.776587,1.0,-12.0,-865.369833,-196.119282,-309.314696,8431.823274,,0,6,14

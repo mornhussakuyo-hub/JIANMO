@@ -18,7 +18,7 @@ class TimeWindow:
 
 @dataclass(slots=True)
 class Customer:
-    """客户层需求对象。Q1 主模型就是围绕它组织的。"""
+    """客户层需求对象，Q1 主模型围绕客户需求组织。"""
 
     customer_id: int  # 客户编号，对应题目中的客户 ID
     x: float # 客户横坐标，单位 km
@@ -59,7 +59,7 @@ class ServiceUnit:
     实际程序里为了方便插入、交换、局部搜索，
     通常会先把客户需求拆成多个可执行 service unit。
 
-    当前项目更推荐保留订单级细粒度：
+    当前项目采用订单级细粒度：
     - 一个订单通常对应一个 service unit
     - 只有超单车容量订单才继续拆 piece
     """
@@ -210,7 +210,7 @@ class SolutionMetrics:
 
 @dataclass(slots=True)
 class Solution:
-    """Q1 最终解对象。"""
+    """Q1 配送调度最终解对象。"""
 
     routes: list[Route] = field(default_factory=list)
     unassigned_units: list[ServiceUnit] = field(default_factory=list)

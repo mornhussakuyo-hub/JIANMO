@@ -9,7 +9,7 @@ from .solution_utils import build_solution_metrics, evaluation_for
 
 
 class SolutionValidator:
-    """Q1 最终解校验器。
+    """Q2 最终解校验器。
 
     它只做校验，不修改 solution。返回的 dict 可以直接写入 report。
     """
