@@ -111,7 +111,7 @@ def assign_reusable_vehicle_schedules(
         vehicles.sort(key=lambda item: item.vehicle_id)
 
     schedules: dict[str, list[tuple[float, float]]] = defaultdict(list)
-    for route in sorted(routes, key=lambda item: (item.departure_min, item.route_id, item.vehicle_id)):
+    for route in sorted(routes, key=lambda item: (item.route_id, item.departure_min, item.vehicle_id)):
         route_weight = sum(stop.delivered_weight for stop in route.stops)
         route_volume = sum(stop.delivered_volume for stop in route.stops)
         compatible_vehicles = [

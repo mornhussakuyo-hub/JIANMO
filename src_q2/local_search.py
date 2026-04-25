@@ -206,7 +206,6 @@ class LocalSearchEngine:
                 break
         self._two_opt_pass(best)
         self._optimize_vehicle_assignment(best)
-        self._refresh_solution(best)
 
         if self._env_int("Q1_ENABLE_FINAL_BRUTE", 0) > 0:
             from .final_polish import FinalPolisher
