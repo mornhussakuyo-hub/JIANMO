@@ -111,7 +111,7 @@ def assign_reusable_vehicle_schedules(
         vehicles.sort(key=lambda item: item.vehicle_id)
 
     schedules: dict[str, list[tuple[float, float]]] = defaultdict(list)
-    for route in sorted(routes, key=lambda item: (item.departure_min, item.route_id, item.vehicle_id)):
+    for route in sorted(routes, key=lambda item: (item.route_id, item.departure_min, item.vehicle_id)):
         route_weight = sum(stop.delivered_weight for stop in route.stops)
         route_volume = sum(stop.delivered_volume for stop in route.stops)
         compatible_vehicles = [
@@ -126,46 +126,59 @@ def assign_reusable_vehicle_schedules(
 
         chosen_vehicle: VehicleInstance | None = None
         chosen_eval: RouteEvaluation | None = None
-        chosen_score: tuple[int, float, float, int, str] | None = None
+        chosen_departure_min: int | None = None
+        chosen_score: tuple[float, float, float, int, int, str] | None = None
+        departure_candidates = departure_candidates_for_route(route, route_evaluator)
 
         for vehicle in compatible_vehicles:
-            candidate_route = Route(
-                vehicle_id=vehicle.vehicle_id,
-                vehicle_type_id=vehicle.vehicle_type.type_id,
-                departure_min=route.departure_min,
-                stops=route.stops,
-                route_id=route.route_id,
-            )
-            evaluation = route_evaluator.evaluate(candidate_route)
-            if not evaluation.feasible or evaluation.return_to_depot_min is None:
-                continue
-            if not _schedule_can_accept(
-                schedules=schedules[vehicle.vehicle_id],
-                start_min=float(route.departure_min),
-                end_min=evaluation.return_to_depot_min,
-                turnaround_min=turnaround_min,
-            ):
-                continue
+            for departure_min in departure_candidates:
+                candidate_route = Route(
+                    vehicle_id=vehicle.vehicle_id,
+                    vehicle_type_id=vehicle.vehicle_type.type_id,
+                    departure_min=departure_min,
+                    stops=route.stops,
+                    route_id=route.route_id,
+                )
+                evaluation = route_evaluator.evaluate(candidate_route)
+                if not evaluation.feasible or evaluation.return_to_depot_min is None:
+                    continue
+                if not _schedule_can_accept(
+                    schedules=schedules[vehicle.vehicle_id],
+                    start_min=float(departure_min),
+                    end_min=evaluation.return_to_depot_min,
+                    turnaround_min=turnaround_min,
+                ):
+                    continue
 
-            already_used = 0 if schedules[vehicle.vehicle_id] else 1
-            latest_finish = max((end for _, end in schedules[vehicle.vehicle_id]), default=0.0)
-            score = (
-                already_used,
-                latest_finish,
-                evaluation.cost.total_cost,
-                vehicle.vehicle_type.type_id,
-                vehicle.vehicle_id,
-            )
-            if chosen_score is None or score < chosen_score:
-                chosen_vehicle = vehicle
-                chosen_eval = evaluation
-                chosen_score = score
+                is_new_vehicle = not schedules[vehicle.vehicle_id]
+                startup_delta = vehicle.vehicle_type.startup_cost if is_new_vehicle else 0.0
+                variable_cost = (
+                    evaluation.cost.energy_cost
+                    + evaluation.cost.carbon_cost
+                    + evaluation.cost.waiting_cost
+                    + evaluation.cost.late_cost
+                )
+                latest_finish = max((end for _, end in schedules[vehicle.vehicle_id]), default=0.0)
+                score = (
+                    variable_cost + startup_delta,
+                    evaluation.cost.total_cost,
+                    latest_finish,
+                    abs(departure_min - route.departure_min),
+                    vehicle.vehicle_type.type_id,
+                    vehicle.vehicle_id,
+                )
+                if chosen_score is None or score < chosen_score:
+                    chosen_vehicle = vehicle
+                    chosen_eval = evaluation
+                    chosen_departure_min = departure_min
+                    chosen_score = score
 
-        if chosen_vehicle is None or chosen_eval is None:
+        if chosen_vehicle is None or chosen_eval is None or chosen_departure_min is None:
             return False
 
         route.vehicle_id = chosen_vehicle.vehicle_id
         route.vehicle_type_id = chosen_vehicle.vehicle_type.type_id
+        route.departure_min = chosen_departure_min
         schedules[route.vehicle_id].append((float(route.departure_min), chosen_eval.return_to_depot_min))
         schedules[route.vehicle_id].sort()
 
@@ -215,6 +228,37 @@ def _schedule_can_accept(
         _time_windows_overlap(start_min, end_min, existing_start, existing_end, turnaround_min)
         for existing_start, existing_end in schedules
     )
+
+
+def departure_candidates_for_route(route: Route, route_evaluator) -> list[int]:
+    """构造通用发车候选集，供路线重计时和车辆复用排班共用。"""
+
+    candidates: set[int] = {int(route.departure_min)}
+    latest_window_end = 1020
+
+    for stop in route.stops:
+        customer = route_evaluator.customers[stop.customer_id]
+        latest_window_end = max(latest_window_end, customer.time_window.end_min)
+        for value in [
+            customer.time_window.start_min - 120,
+            customer.time_window.start_min - 60,
+            customer.time_window.start_min - 30,
+            customer.time_window.start_min,
+            customer.time_window.end_min - 60,
+            customer.time_window.end_min - 30,
+            customer.time_window.end_min,
+        ]:
+            if value >= 480:
+                candidates.add(int(value))
+
+    upper = min(24 * 60 - 1, max(1020, latest_window_end + 120))
+    for value in [480, 540, 600, 690, 780, 900, 1020, 1050, 1080]:
+        if 480 <= value <= upper:
+            candidates.add(value)
+
+    for value in range(480, upper + 1, 30):
+        candidates.add(value)
+    return sorted(candidates)
 
 
 def _time_windows_overlap(
