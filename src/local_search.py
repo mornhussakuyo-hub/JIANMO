@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 import os
 import random
+from collections import defaultdict
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
@@ -31,6 +32,11 @@ class LocalSearchEngine:
     DEFAULT_DESTROY_MAX_RATIO = 0.06
     DEFAULT_MAX_REPAIR_ROUTES = 24
     DEFAULT_MAX_POSITION_NEIGHBORS = 3
+    DEFAULT_ROUTE_ELIMINATION_PERIOD = 5
+    DEFAULT_ROUTE_ELIMINATION_CANDIDATES = 4
+    DEFAULT_POST_ROUTE_ELIMINATION_PASSES = 2
+    DEFAULT_POST_2OPT_MAX_ROUTE_SIZE = 10
+    DEFAULT_POST_2OPT_PASSES = 1
     ACCEPTED_WORSE_SCORE = 1.0
     IMPROVED_CURRENT_SCORE = 4.0
     NEW_BEST_SCORE = 10.0
@@ -49,6 +55,24 @@ class LocalSearchEngine:
             "Q1_ALNS_MAX_POSITION_NEIGHBORS",
             self.DEFAULT_MAX_POSITION_NEIGHBORS,
         )
+        self.route_elimination_period = self._env_int(
+            "Q1_ALNS_ROUTE_ELIMINATION_PERIOD",
+            self.DEFAULT_ROUTE_ELIMINATION_PERIOD,
+        )
+        self.route_elimination_candidates = self._env_int(
+            "Q1_ALNS_ROUTE_ELIMINATION_CANDIDATES",
+            self.DEFAULT_ROUTE_ELIMINATION_CANDIDATES,
+        )
+        self.post_route_elimination_passes = self._env_int(
+            "Q1_POST_ROUTE_ELIMINATION_PASSES",
+            self.DEFAULT_POST_ROUTE_ELIMINATION_PASSES,
+        )
+        self.post_2opt_max_route_size = self._env_int(
+            "Q1_POST_2OPT_MAX_ROUTE_SIZE",
+            self.DEFAULT_POST_2OPT_MAX_ROUTE_SIZE,
+        )
+        self.post_2opt_passes = self._env_int("Q1_POST_2OPT_PASSES", self.DEFAULT_POST_2OPT_PASSES)
+        self.enable_related_route_removal = self._env_int("Q1_ALNS_ENABLE_RELATED_ROUTE_REMOVAL", 0) > 0
         self.random_seed = self._env_int("Q1_ALNS_RANDOM_SEED", self.RANDOM_SEED)
         self.random = random.Random(self.random_seed)
 
@@ -69,6 +93,8 @@ class LocalSearchEngine:
             "route_removal": self._destroy_route_removal,
             "worst_removal": self._destroy_worst_removal,
         }
+        if self.enable_related_route_removal:
+            destroy_ops["related_route_removal"] = self._destroy_related_route_removal
         repair_ops: dict[str, Callable[[Solution, list[ServiceUnit]], None]] = {
             "greedy_insertion": self._repair_greedy_insertion,
             "regret2_insertion": self._repair_regret2_insertion,
@@ -90,7 +116,11 @@ class LocalSearchEngine:
         log(
             f"ALNS 参数: destroy_ratio=[{self.destroy_min_ratio:.3f}, {self.destroy_max_ratio:.3f}], "
             f"max_repair_routes={self.max_repair_routes}, "
-            f"max_position_neighbors={self.max_position_neighbors}, seed={self.random_seed}",
+            f"max_position_neighbors={self.max_position_neighbors}, "
+            f"route_elimination_period={self.route_elimination_period}, "
+            f"route_elimination_candidates={self.route_elimination_candidates}, "
+            f"post_route_elimination_passes={self.post_route_elimination_passes}, "
+            f"related_route_removal={self.enable_related_route_removal}, seed={self.random_seed}",
             indent=2,
         )
 
@@ -103,6 +133,9 @@ class LocalSearchEngine:
             removed_units = destroy_ops[destroy_name](candidate, remove_count)
             repair_ops[repair_name](candidate, removed_units)
             self._refresh_solution(candidate)
+
+            if self._should_try_route_elimination(iteration):
+                self._route_elimination_pass(candidate, max_attempts=self.route_elimination_candidates)
 
             candidate_cost = self._fitness(candidate)
             delta = candidate_cost - current_cost
@@ -150,6 +183,15 @@ class LocalSearchEngine:
                 )
 
             temperature *= cooling_rate
+
+        log("ALNS 后处理: 路线消除、路线内 2-opt、车型重分配", indent=1)
+        for _ in range(max(0, self.post_route_elimination_passes)):
+            changed = self._route_elimination_pass(best, max_attempts=max(self.route_elimination_candidates * 2, 1))
+            if not changed:
+                break
+        self._two_opt_pass(best)
+        self._optimize_vehicle_assignment(best)
+        self._refresh_solution(best)
 
         log(
             f"ALNS 结束: 最优成本 {best.metrics.total_cost:.2f}, 路线 {len(best.routes)} 条, "
@@ -206,6 +248,32 @@ class LocalSearchEngine:
                 break
 
         return self._remove_unit_ids(solution, chosen_ids[: max(remove_count, len(chosen_ids))])
+
+    def _destroy_related_route_removal(self, solution: Solution, remove_count: int) -> list[ServiceUnit]:
+        """移除空间上相近的几条路线，让修复阶段重组局部片区。"""
+
+        if not solution.routes:
+            return []
+
+        seed_index = self.random.randrange(len(solution.routes))
+        seed_route = solution.routes[seed_index]
+        scored_routes: list[tuple[float, int]] = []
+
+        for route_index, route in enumerate(solution.routes):
+            if route_index == seed_index:
+                scored_routes.append((-1.0, route_index))
+                continue
+            scored_routes.append((self._route_distance(seed_route, route), route_index))
+
+        scored_routes.sort(key=lambda item: (item[0], item[1]))
+        chosen_ids: list[str] = []
+        for _, route_index in scored_routes:
+            for stop in solution.routes[route_index].stops:
+                chosen_ids.extend(stop.service_unit_ids)
+            if len(chosen_ids) >= remove_count:
+                break
+
+        return self._remove_unit_ids(solution, chosen_ids)
 
     def _destroy_worst_removal(self, solution: Solution, remove_count: int) -> list[ServiceUnit]:
         served_unit_ids = self._served_unit_ids(solution)
@@ -272,10 +340,16 @@ class LocalSearchEngine:
             pending.pop(selected_index)
 
     def _best_insertion_move(self, solution: Solution, unit: ServiceUnit) -> InsertionMove | None:
-        moves = self._top_insertion_moves(solution, unit, limit=1)
+        moves = self._top_insertion_moves(solution, unit, limit=1, allow_new_route=True)
         return moves[0] if moves else None
 
-    def _top_insertion_moves(self, solution: Solution, unit: ServiceUnit, limit: int) -> list[InsertionMove]:
+    def _top_insertion_moves(
+        self,
+        solution: Solution,
+        unit: ServiceUnit,
+        limit: int,
+        allow_new_route: bool = True,
+    ) -> list[InsertionMove]:
         moves: list[InsertionMove] = []
 
         for route_index, route in self._candidate_routes_for_unit(solution, unit):
@@ -298,9 +372,10 @@ class LocalSearchEngine:
                     )
                 )
 
-        new_route_move = self._best_new_route_move(solution, unit)
-        if new_route_move is not None:
-            moves.append(new_route_move)
+        if allow_new_route:
+            new_route_move = self._best_new_route_move(solution, unit)
+            if new_route_move is not None:
+                moves.append(new_route_move)
 
         moves.sort(key=lambda move: move.delta_cost)
         return moves[:limit]
@@ -538,8 +613,301 @@ class LocalSearchEngine:
                     candidates.add(min(upper, int(value)))
         return sorted(candidates)
 
+    def _should_try_route_elimination(self, iteration: int) -> bool:
+        if self.route_elimination_period <= 0:
+            return False
+        return iteration % self.route_elimination_period == 0
+
+    def _route_elimination_pass(self, solution: Solution, max_attempts: int) -> bool:
+        """尝试清空若干条较容易被吸收的路线，并只插回已有路线。"""
+
+        if max_attempts <= 0 or len(solution.routes) <= 1:
+            return False
+
+        self._refresh_solution(solution)
+        base_fitness = self._fitness(solution)
+        candidate_route_indexes = sorted(
+            range(len(solution.routes)),
+            key=lambda index: self._route_elimination_key(solution, index),
+        )
+
+        improved = False
+        for route_index in candidate_route_indexes[:max_attempts]:
+            if route_index >= len(solution.routes):
+                continue
+
+            trial = self._clone_solution(solution)
+            removed_route = trial.routes.pop(route_index)
+            removed_units = [
+                self.route_evaluator.service_units[unit_id]
+                for stop in removed_route.stops
+                for unit_id in stop.service_unit_ids
+                if unit_id in self.route_evaluator.service_units
+            ]
+            trial.route_evaluations.pop(removed_route.vehicle_id, None)
+            self._refresh_solution(trial)
+
+            if not self._repair_regret2_existing_routes(trial, removed_units):
+                continue
+
+            self._refresh_solution(trial)
+            trial_fitness = self._fitness(trial)
+            if len(trial.unassigned_units) == 0 and trial_fitness + 1e-6 < base_fitness:
+                old_routes = len(solution.routes)
+                old_cost = solution.metrics.total_cost
+                self._replace_solution(solution, trial)
+                base_fitness = trial_fitness
+                improved = True
+                log(
+                    f"路线消除成功: 路线 {old_routes} -> {len(solution.routes)}, "
+                    f"成本 {old_cost:.2f} -> {solution.metrics.total_cost:.2f}",
+                    indent=2,
+                )
+
+        return improved
+
+    def _repair_regret2_existing_routes(self, solution: Solution, removed_units: list[ServiceUnit]) -> bool:
+        pending = list(removed_units)
+        while pending:
+            selected_move: InsertionMove | None = None
+            selected_index = -1
+            best_regret = -float("inf")
+
+            for index, unit in enumerate(pending):
+                moves = self._top_insertion_moves(solution, unit, limit=2, allow_new_route=False)
+                if not moves:
+                    continue
+
+                first = moves[0]
+                second_cost = moves[1].delta_cost if len(moves) > 1 else first.delta_cost + 10_000.0
+                regret = second_cost - first.delta_cost
+                if regret > best_regret:
+                    best_regret = regret
+                    selected_move = first
+                    selected_index = index
+
+            if selected_move is None:
+                return False
+
+            self._apply_insertion_move(solution, selected_move)
+            pending.pop(selected_index)
+
+        return True
+
+    def _route_elimination_key(self, solution: Solution, route_index: int) -> tuple[float, int, float, int]:
+        route = solution.routes[route_index]
+        vehicle = self.route_evaluator.vehicles[route.vehicle_id]
+        total_weight = sum(stop.delivered_weight for stop in route.stops)
+        total_volume = sum(stop.delivered_volume for stop in route.stops)
+        load_ratio = max(
+            total_weight / max(vehicle.vehicle_type.max_weight, 1e-9),
+            total_volume / max(vehicle.vehicle_type.max_volume, 1e-9),
+        )
+        unit_count = sum(len(stop.service_unit_ids) for stop in route.stops)
+        evaluation = solution.route_evaluations.get(route.vehicle_id) or self.route_evaluator.evaluate(route)
+        return (load_ratio, unit_count, -evaluation.cost.total_cost, route_index)
+
+    def _two_opt_pass(self, solution: Solution) -> bool:
+        """对短路线做受限 2-opt，改善访问顺序和迟到/等待。"""
+
+        if self.post_2opt_passes <= 0 or self.post_2opt_max_route_size <= 2:
+            return False
+
+        improved = False
+        for pass_index in range(1, self.post_2opt_passes + 1):
+            pass_improved = False
+            for route_index, route in enumerate(list(solution.routes)):
+                if len(route.stops) < 4 or len(route.stops) > self.post_2opt_max_route_size:
+                    continue
+
+                old_eval = solution.route_evaluations.get(route.vehicle_id) or self.route_evaluator.evaluate(route)
+                best_route = route
+                best_eval = old_eval
+
+                for left in range(0, len(route.stops) - 2):
+                    for right in range(left + 2, len(route.stops)):
+                        candidate_stops = (
+                            route.stops[:left]
+                            + list(reversed(route.stops[left : right + 1]))
+                            + route.stops[right + 1 :]
+                        )
+                        candidate_route = Route(
+                            vehicle_id=route.vehicle_id,
+                            vehicle_type_id=route.vehicle_type_id,
+                            departure_min=route.departure_min,
+                            stops=[
+                                RouteStop(
+                                    service_unit_ids=list(stop.service_unit_ids),
+                                    customer_id=stop.customer_id,
+                                    delivered_weight=stop.delivered_weight,
+                                    delivered_volume=stop.delivered_volume,
+                                )
+                                for stop in candidate_stops
+                            ],
+                        )
+                        candidate_route, candidate_eval = self._retime_route(candidate_route)
+                        if not candidate_eval.feasible:
+                            continue
+                        if candidate_eval.cost.total_cost + 1e-6 < best_eval.cost.total_cost:
+                            best_route = candidate_route
+                            best_eval = candidate_eval
+
+                if best_route is not route:
+                    solution.routes[route_index] = best_route
+                    solution.route_evaluations[best_route.vehicle_id] = best_eval
+                    pass_improved = True
+                    improved = True
+
+            if pass_improved:
+                self._refresh_solution(solution)
+                log(
+                    f"2-opt 第 {pass_index} 轮有改进: 成本 {solution.metrics.total_cost:.2f}",
+                    indent=2,
+                )
+            else:
+                break
+
+        return improved
+
+    def _optimize_vehicle_assignment(self, solution: Solution) -> bool:
+        """固定路线顺序，重新给路线分配更合适的车辆类型和实例。"""
+
+        if not solution.routes:
+            return False
+
+        vehicles_by_type: dict[int, list[VehicleInstance]] = defaultdict(list)
+        for vehicle in self.route_evaluator.vehicles.values():
+            vehicles_by_type[vehicle.vehicle_type.type_id].append(vehicle)
+        for vehicles in vehicles_by_type.values():
+            vehicles.sort(key=lambda vehicle: vehicle.vehicle_id)
+
+        route_choices: list[tuple[int, list[tuple[float, int, Route, RouteEvaluation]]]] = []
+        for route_index, route in enumerate(solution.routes):
+            total_weight = sum(stop.delivered_weight for stop in route.stops)
+            total_volume = sum(stop.delivered_volume for stop in route.stops)
+            choices: list[tuple[float, int, Route, RouteEvaluation]] = []
+
+            for vehicle_type_id, vehicles in sorted(vehicles_by_type.items()):
+                representative = vehicles[0]
+                if total_weight > representative.vehicle_type.max_weight + 1e-9:
+                    continue
+                if total_volume > representative.vehicle_type.max_volume + 1e-9:
+                    continue
+
+                candidate_route = Route(
+                    vehicle_id=representative.vehicle_id,
+                    vehicle_type_id=vehicle_type_id,
+                    departure_min=route.departure_min,
+                    stops=[
+                        RouteStop(
+                            service_unit_ids=list(stop.service_unit_ids),
+                            customer_id=stop.customer_id,
+                            delivered_weight=stop.delivered_weight,
+                            delivered_volume=stop.delivered_volume,
+                        )
+                        for stop in route.stops
+                    ],
+                )
+                candidate_route, candidate_eval = self._retime_route(candidate_route)
+                if candidate_eval.feasible:
+                    choices.append((candidate_eval.cost.total_cost, vehicle_type_id, candidate_route, candidate_eval))
+
+            if not choices:
+                return False
+
+            choices.sort(key=lambda item: (item[0], item[1]))
+            route_choices.append((route_index, choices))
+
+        remaining_by_type = {type_id: list(vehicles) for type_id, vehicles in vehicles_by_type.items()}
+        assigned_routes: list[Route | None] = [None] * len(solution.routes)
+        assigned_evaluations: dict[str, RouteEvaluation] = {}
+        route_order = sorted(
+            route_choices,
+            key=lambda item: (
+                len(item[1]),
+                min(choice[0] for choice in item[1]),
+                item[0],
+            ),
+        )
+
+        for route_index, choices in route_order:
+            chosen: tuple[float, int, Route, RouteEvaluation] | None = None
+            for choice in choices:
+                _, vehicle_type_id, _, _ = choice
+                if remaining_by_type.get(vehicle_type_id):
+                    chosen = choice
+                    break
+            if chosen is None:
+                return False
+
+            _, vehicle_type_id, prototype_route, _ = chosen
+            vehicle = remaining_by_type[vehicle_type_id].pop(0)
+            route = Route(
+                vehicle_id=vehicle.vehicle_id,
+                vehicle_type_id=vehicle.vehicle_type.type_id,
+                departure_min=prototype_route.departure_min,
+                stops=[
+                    RouteStop(
+                        service_unit_ids=list(stop.service_unit_ids),
+                        customer_id=stop.customer_id,
+                        delivered_weight=stop.delivered_weight,
+                        delivered_volume=stop.delivered_volume,
+                    )
+                    for stop in prototype_route.stops
+                ],
+            )
+            route, evaluation = self._retime_route(route)
+            if not evaluation.feasible:
+                return False
+
+            assigned_routes[route_index] = route
+            assigned_evaluations[route.vehicle_id] = evaluation
+
+        trial = Solution(
+            routes=[route for route in assigned_routes if route is not None],
+            unassigned_units=list(solution.unassigned_units),
+            route_evaluations=assigned_evaluations,
+            metrics=SolutionMetrics(),
+        )
+        self._refresh_solution(trial)
+
+        if self._fitness(trial) + 1e-6 < self._fitness(solution):
+            old_cost = solution.metrics.total_cost
+            self._replace_solution(solution, trial)
+            log(
+                f"车型重分配成功: 成本 {old_cost:.2f} -> {solution.metrics.total_cost:.2f}",
+                indent=2,
+            )
+            return True
+
+        return False
+
+    def _replace_solution(self, target: Solution, source: Solution) -> None:
+        target.routes = [self._clone_route(route) for route in source.routes]
+        target.unassigned_units = list(source.unassigned_units)
+        target.route_evaluations = dict(source.route_evaluations)
+        target.metrics = SolutionMetrics(
+            total_cost=source.metrics.total_cost,
+            total_distance_km=source.metrics.total_distance_km,
+            total_energy_cost=source.metrics.total_energy_cost,
+            total_carbon_cost=source.metrics.total_carbon_cost,
+            total_waiting_cost=source.metrics.total_waiting_cost,
+            total_late_cost=source.metrics.total_late_cost,
+            used_vehicle_count=source.metrics.used_vehicle_count,
+            unassigned_unit_count=source.metrics.unassigned_unit_count,
+        )
+
     def _customer_distance(self, left_customer_id: int, right_customer_id: int) -> float:
         return self.route_evaluator.distance_matrix[left_customer_id][right_customer_id]
+
+    def _route_distance(self, left: Route, right: Route) -> float:
+        if not left.stops or not right.stops:
+            return float("inf")
+        return min(
+            self._customer_distance(left_stop.customer_id, right_stop.customer_id)
+            for left_stop in left.stops
+            for right_stop in right.stops
+        )
 
     def _refresh_solution(self, solution: Solution) -> None:
         self._drop_empty_routes(solution)
