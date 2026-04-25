@@ -7,8 +7,10 @@ from pathlib import Path
 from src.constants import Q1Constants
 from src.costs import ArcCostCalculator
 from src.data_loader import Q1DataLoader
+from src.initial_solution import GiantTourBuilder
 from src.model import Customer, Route, RouteStop, ServiceUnit, TimeWindow, VehicleInstance, VehicleType
 from src.route_evaluator import RouteEvaluator
+from src.split_dp import SplitDPBuilder
 from src.task_builder import ServiceUnitBuilder
 from src.traffic import TrafficProfile
 
@@ -409,6 +411,106 @@ class TestRouteEvaluator(unittest.TestCase):
         self.assertEqual(len(result.leg_records), 2)
         self.assertGreater(result.cost.total_cost, 0.0)
         self.assertIsNotNone(result.return_to_depot_min)
+
+
+class TestGiantTourBuilder(unittest.TestCase):
+    def test_giant_tour_builders_cover_all_units_once(self) -> None:
+        constants = Q1Constants()
+        traffic = TrafficProfile(constants=constants)
+        costs = ArcCostCalculator(constants=constants)
+        vehicle = VehicleInstance(
+            vehicle_id="T1_001",
+            vehicle_type=VehicleType(1, "燃油", 3000.0, 13.5, 1, 400.0),
+        )
+        customers = {
+            1: Customer(1, 1.0, 0.0, 100.0, 1.0, TimeWindow(540, 720), False, []),
+            2: Customer(2, 0.0, 1.0, 100.0, 1.0, TimeWindow(540, 720), False, []),
+            3: Customer(3, -1.0, 0.0, 100.0, 1.0, TimeWindow(540, 720), False, []),
+            4: Customer(4, 0.0, -1.0, 100.0, 1.0, TimeWindow(540, 720), False, []),
+        }
+        units = [
+            ServiceUnit("C001_U001", 1, 100.0, 1.0, customers[1].time_window, False, ["O1"]),
+            ServiceUnit("C002_U001", 2, 100.0, 1.0, customers[2].time_window, False, ["O2"]),
+            ServiceUnit("C003_U001", 3, 100.0, 1.0, customers[3].time_window, False, ["O3"]),
+            ServiceUnit("C004_U001", 4, 100.0, 1.0, customers[4].time_window, False, ["O4"]),
+        ]
+        distance_matrix = {
+            0: {1: 1.0, 2: 1.0, 3: 1.0, 4: 1.0},
+            1: {0: 1.0, 2: 1.4, 3: 2.0, 4: 1.4},
+            2: {0: 1.0, 1: 1.4, 3: 1.4, 4: 2.0},
+            3: {0: 1.0, 1: 2.0, 2: 1.4, 4: 1.4},
+            4: {0: 1.0, 1: 1.4, 2: 2.0, 3: 1.4},
+        }
+        evaluator = RouteEvaluator(
+            customers=customers,
+            vehicles={vehicle.vehicle_id: vehicle},
+            service_units={unit.unit_id: unit for unit in units},
+            distance_matrix=distance_matrix,
+            traffic_profile=traffic,
+            arc_cost_calculator=costs,
+            constants=constants,
+        )
+
+        pool = GiantTourBuilder(evaluator).build_tour_pool(units)
+
+        self.assertGreaterEqual(len(pool), 3)
+        self.assertIn("nearest_neighbor", {name for name, _ in pool})
+        self.assertIn("mst_dfs", {name for name, _ in pool})
+        self.assertIn("angle_scan_0", {name for name, _ in pool})
+
+        expected_ids = {unit.unit_id for unit in units}
+        for _, tour in pool:
+            self.assertEqual(len(tour), len(units))
+            self.assertEqual({unit.unit_id for unit in tour}, expected_ids)
+
+
+class TestSplitDPBuilder(unittest.TestCase):
+    def test_split_dp_covers_all_units_once(self) -> None:
+        constants = Q1Constants()
+        traffic = TrafficProfile(constants=constants)
+        costs = ArcCostCalculator(constants=constants)
+        vehicle_type = VehicleType(1, "燃油", 200.0, 5.0, 2, 400.0)
+        vehicles = [
+            VehicleInstance(vehicle_id="T1_001", vehicle_type=vehicle_type),
+            VehicleInstance(vehicle_id="T1_002", vehicle_type=vehicle_type),
+        ]
+        customers = {
+            1: Customer(1, 1.0, 0.0, 100.0, 1.0, TimeWindow(540, 720), False, []),
+            2: Customer(2, 2.0, 0.0, 100.0, 1.0, TimeWindow(540, 720), False, []),
+            3: Customer(3, 3.0, 0.0, 100.0, 1.0, TimeWindow(540, 720), False, []),
+        }
+        units = [
+            ServiceUnit("C001_U001", 1, 100.0, 1.0, customers[1].time_window, False, ["O1"]),
+            ServiceUnit("C002_U001", 2, 100.0, 1.0, customers[2].time_window, False, ["O2"]),
+            ServiceUnit("C003_U001", 3, 100.0, 1.0, customers[3].time_window, False, ["O3"]),
+        ]
+        distance_matrix = {
+            0: {1: 1.0, 2: 2.0, 3: 3.0},
+            1: {0: 1.0, 2: 1.0, 3: 2.0},
+            2: {0: 2.0, 1: 1.0, 3: 1.0},
+            3: {0: 3.0, 1: 2.0, 2: 1.0},
+        }
+        evaluator = RouteEvaluator(
+            customers=customers,
+            vehicles={vehicle.vehicle_id: vehicle for vehicle in vehicles},
+            service_units={unit.unit_id: unit for unit in units},
+            distance_matrix=distance_matrix,
+            traffic_profile=traffic,
+            arc_cost_calculator=costs,
+            constants=constants,
+        )
+
+        solution = SplitDPBuilder(evaluator).build_solution(tour=units, vehicles=vehicles)
+
+        served_ids = {
+            service_unit_id
+            for route in solution.routes
+            for stop in route.stops
+            for service_unit_id in stop.service_unit_ids
+        }
+        self.assertEqual(solution.metrics.unassigned_unit_count, 0)
+        self.assertEqual(served_ids, {unit.unit_id for unit in units})
+        self.assertEqual(len(solution.routes), 2)
 
 
 if __name__ == "__main__":

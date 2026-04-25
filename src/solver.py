@@ -6,6 +6,7 @@ from .constants import Q1Constants
 from .costs import ArcCostCalculator
 from .data_loader import Q1DataLoader
 from .initial_solution import InitialSolutionBuilder
+from .log_utils import log
 from .local_search import LocalSearchEngine
 from .model import Q1InputData, ServiceUnit, Solution
 from .route_evaluator import RouteEvaluator
@@ -35,24 +36,47 @@ class Q1Solver:
         8. 最后汇总指标并输出解
         """
 
-        input_data = self.load_input()
-        service_units = self.build_service_units(input_data)
-        evaluator = self.build_route_evaluator(input_data, service_units)
+        log("========== Q1 静态绿色物流调度求解开始 ==========")
+        log(f"数据目录: {self.data_dir}", indent=1)
 
+        log("步骤 1/5: 读取 cleaned_data 输入数据")
+        input_data = self.load_input()
+        log(
+            f"读取完成: 正需求客户 {len(input_data.customers)} 个, "
+            f"车型 {len(input_data.vehicle_types)} 类, 车辆实例 {len(input_data.vehicles)} 辆",
+            indent=1,
+        )
+
+        log("步骤 2/5: 构造 ServiceUnit 任务块")
+        service_units = self.build_service_units(input_data)
+        log(f"ServiceUnit 构造完成: {len(service_units)} 个任务块", indent=1)
+
+        log("步骤 3/5: 初始化交通模型、弧成本模型和路线评价器")
+        evaluator = self.build_route_evaluator(input_data, service_units)
+        log("路线评价器准备完成", indent=1)
+
+        log("步骤 4/5: 构造初始解候选池并择优")
         initial_builder = InitialSolutionBuilder(route_evaluator=evaluator)
         solution = initial_builder.build(
             service_units=service_units,
             vehicles=input_data.vehicles,
         )
+        log(
+            f"初始解完成: 路线 {len(solution.routes)} 条, 未分配 {len(solution.unassigned_units)} 个, "
+            f"成本 {solution.metrics.total_cost:.2f}",
+            indent=1,
+        )
 
+        log("步骤 5/5: 执行局部搜索/改进器")
         local_search = LocalSearchEngine(route_evaluator=evaluator)
         solution = local_search.improve(solution)
+        log(
+            f"求解结束: 路线 {len(solution.routes)} 条, 未分配 {len(solution.unassigned_units)} 个, "
+            f"总成本 {solution.metrics.total_cost:.2f}, 总距离 {solution.metrics.total_distance_km:.2f} km",
+            indent=1,
+        )
+        log("========== Q1 求解结束 ==========")
 
-        # 这里后面建议补一个“解层指标汇总”步骤：
-        # 1. 把每条路线重新评价一遍
-        # 2. 累加总成本、总距离、总等待、总迟到
-        # 3. 统计用了多少辆车、还有多少未分配任务
-        # 4. 写入 solution.metrics
         return solution
 
     def load_input(self) -> Q1InputData:
@@ -77,10 +101,16 @@ class Q1Solver:
     ) -> RouteEvaluator:
         """创建所有构造和搜索阶段共用的路线评价器。"""
 
+        log("创建 TrafficProfile: 分段时变速度模型", indent=1)
         traffic_profile = TrafficProfile(constants=self.constants)
+        log("创建 ArcCostCalculator: 能耗、碳排、等待、迟到成本模型", indent=1)
         arc_cost_calculator = ArcCostCalculator(constants=self.constants)
         vehicles_by_id = {vehicle.vehicle_id: vehicle for vehicle in input_data.vehicles}
         units_by_id = {unit.unit_id: unit for unit in service_units}
+        log(
+            f"评价器索引: vehicles_by_id={len(vehicles_by_id)}, service_units_by_id={len(units_by_id)}",
+            indent=1,
+        )
 
         return RouteEvaluator(
             customers=input_data.customers,
@@ -91,4 +121,3 @@ class Q1Solver:
             arc_cost_calculator=arc_cost_calculator,
             constants=self.constants,
         )
-

@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 from .constants import Q1Constants, RuntimeBounds
+from .log_utils import log
 from .model import Customer, DistanceMatrix, Q1InputData, TimeWindow, VehicleInstance, VehicleType
 
 
@@ -33,6 +34,7 @@ class Q1DataLoader:
         distance_matrix = self.load_distance_matrix()
 
         self.validate_distance_matrix(customers,distance_matrix)
+        log("距离矩阵覆盖性校验通过", indent=2)
 
         return Q1InputData(
             customers=customers,
@@ -55,6 +57,7 @@ class Q1DataLoader:
         """
 
         file_path = self.data_dir / "customers.json"
+        log(f"读取客户文件: {file_path}", indent=2)
         payload = json.loads(file_path.read_text(encoding="utf-8"))
         customers: dict[int, Customer] = {}
 
@@ -83,6 +86,12 @@ class Q1DataLoader:
                 raw_orders=orders,
             )
 
+        raw_order_count = sum(len(customer.raw_orders) for customer in customers.values())
+        log(
+            f"客户读取完成: 原始客户 {len(payload)} 行, 正需求客户 {len(customers)} 个, "
+            f"订单 {raw_order_count} 条",
+            indent=2,
+        )
         return customers
 
     def load_vehicle_types(self) -> dict[int, VehicleType]:
@@ -94,6 +103,7 @@ class Q1DataLoader:
         """
 
         file_path = self.data_dir / "vehicles.json"
+        log(f"读取车型文件: {file_path}", indent=2)
         payload = json.loads(file_path.read_text(encoding="utf-8"))
         vehicle_types: dict[int, VehicleType] = {}
 
@@ -108,6 +118,14 @@ class Q1DataLoader:
                 startup_cost=float(row["startup_cost"]),
             )
 
+        log(f"车型读取完成: {len(vehicle_types)} 类", indent=2)
+        for vehicle_type in vehicle_types.values():
+            log(
+                f"车型 {vehicle_type.type_id}: {vehicle_type.energy_type}, "
+                f"{vehicle_type.max_weight}kg/{vehicle_type.max_volume}m3, "
+                f"数量 {vehicle_type.available_count}, 启动成本 {vehicle_type.startup_cost}",
+                indent=3,
+            )
         return vehicle_types
 
     def build_vehicle_instances(self, vehicle_types: dict[int, VehicleType]) -> list[VehicleInstance]:
@@ -119,6 +137,7 @@ class Q1DataLoader:
         T1_001, T1_002, ..., T1_060
         """
 
+        log("展开车型为具体车辆实例", indent=2)
         vehicles: list[VehicleInstance] = []
         for vehicle_type in vehicle_types.values():
             for index in range(1, vehicle_type.available_count + 1):
@@ -128,6 +147,7 @@ class Q1DataLoader:
                         vehicle_type=vehicle_type,
                     )
                 )
+        log(f"车辆实例展开完成: {len(vehicles)} 辆", indent=2)
         return vehicles
 
     def load_distance_matrix(self) -> DistanceMatrix:
@@ -139,6 +159,7 @@ class Q1DataLoader:
         """
 
         file_path = self.data_dir / "distance_matrix.csv"
+        log(f"读取距离矩阵: {file_path}", indent=2)
 
         distance_matrix: DistanceMatrix = {}
 
@@ -168,6 +189,8 @@ class Q1DataLoader:
                 if value == "":
                     continue
                 distance_matrix[from_node][to_node] = float(value)
+        arc_count = sum(len(row) for row in distance_matrix.values())
+        log(f"距离矩阵读取完成: {len(distance_matrix)} 个起点行, {arc_count} 条弧距离", indent=2)
         return distance_matrix
 
     def derive_runtime_bounds(self, input_data: Q1InputData) -> RuntimeBounds:

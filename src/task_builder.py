@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Sequence
 from math import ceil
 
+from .log_utils import log
 from .model import Customer, ServiceUnit, VehicleType
 
 
@@ -42,19 +43,39 @@ class ServiceUnitBuilder:
             raise ValueError("vehicle_types 不能为空。")
 
         safe_weight, safe_volume = self._get_safe_capacity(vehicle_types)
+        customers = list(customers)
+        log(
+            f"ServiceUnitBuilder 启动: 客户 {len(customers)} 个, "
+            f"安全容量 {safe_weight:.1f}kg/{safe_volume:.1f}m3",
+            indent=2,
+        )
 
         service_units: list[ServiceUnit] = []
-        for customer in customers:
-            service_units.extend(
-                self.split_customer_into_units(
-                    customer=customer,
-                    vehicle_types=vehicle_types,
-                    safe_weight=safe_weight,
-                    safe_volume=safe_volume,
-                )
+        split_customer_count = 0
+        for index, customer in enumerate(customers, start=1):
+            customer_units = self.split_customer_into_units(
+                customer=customer,
+                vehicle_types=vehicle_types,
+                safe_weight=safe_weight,
+                safe_volume=safe_volume,
             )
+            if len(customer_units) > 1:
+                split_customer_count += 1
+            service_units.extend(customer_units)
+            if index == 1 or index % 20 == 0 or index == len(customers):
+                log(
+                    f"已处理客户 {index}/{len(customers)}，累计 ServiceUnit {len(service_units)} 个",
+                    indent=3,
+                )
 
         self.validate_units(service_units=service_units, vehicle_types=vehicle_types)
+        total_weight = sum(unit.weight for unit in service_units)
+        total_volume = sum(unit.volume for unit in service_units)
+        log(
+            f"ServiceUnit 校验通过: {len(service_units)} 个, 拆分客户 {split_customer_count} 个, "
+            f"总重量 {total_weight:.3f}kg, 总体积 {total_volume:.3f}m3",
+            indent=2,
+        )
         return service_units
 
     def split_customer_into_units(
