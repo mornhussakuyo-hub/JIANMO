@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import defaultdict
 from collections.abc import Sequence
 
 from .model import Route, RouteEvaluation, ServiceUnit, SolutionMetrics, VehicleInstance
@@ -88,3 +89,139 @@ def build_solution_metrics(
         + metrics.total_late_cost
     )
     return metrics
+
+
+def assign_reusable_vehicle_schedules(
+    routes: Sequence[Route],
+    vehicles_by_id: dict[str, VehicleInstance],
+    route_evaluator,
+    turnaround_min: float = 0.0,
+) -> bool:
+    """
+    在允许真实车辆复用时，为路线重新分配具体车辆实例。
+
+    返回 False 表示当前路线集合无法排成一张无时间重叠的真实车辆时间表。
+    这个状态必须被搜索过程当成硬约束处理，不能静默保留旧 vehicle_id。
+    """
+
+    vehicles_by_type: dict[int, list[VehicleInstance]] = defaultdict(list)
+    for vehicle in vehicles_by_id.values():
+        vehicles_by_type[vehicle.vehicle_type.type_id].append(vehicle)
+    for vehicles in vehicles_by_type.values():
+        vehicles.sort(key=lambda item: item.vehicle_id)
+
+    schedules: dict[str, list[tuple[float, float]]] = defaultdict(list)
+    for route in sorted(routes, key=lambda item: (item.departure_min, item.route_id, item.vehicle_id)):
+        route_weight = sum(stop.delivered_weight for stop in route.stops)
+        route_volume = sum(stop.delivered_volume for stop in route.stops)
+        compatible_vehicles = [
+            vehicle
+            for vehicles in vehicles_by_type.values()
+            for vehicle in vehicles
+            if route_weight <= vehicle.vehicle_type.max_weight + 1e-9
+            and route_volume <= vehicle.vehicle_type.max_volume + 1e-9
+        ]
+        if not compatible_vehicles:
+            return False
+
+        chosen_vehicle: VehicleInstance | None = None
+        chosen_eval: RouteEvaluation | None = None
+        chosen_score: tuple[int, float, float, int, str] | None = None
+
+        for vehicle in compatible_vehicles:
+            candidate_route = Route(
+                vehicle_id=vehicle.vehicle_id,
+                vehicle_type_id=vehicle.vehicle_type.type_id,
+                departure_min=route.departure_min,
+                stops=route.stops,
+                route_id=route.route_id,
+            )
+            evaluation = route_evaluator.evaluate(candidate_route)
+            if not evaluation.feasible or evaluation.return_to_depot_min is None:
+                continue
+            if not _schedule_can_accept(
+                schedules=schedules[vehicle.vehicle_id],
+                start_min=float(route.departure_min),
+                end_min=evaluation.return_to_depot_min,
+                turnaround_min=turnaround_min,
+            ):
+                continue
+
+            already_used = 0 if schedules[vehicle.vehicle_id] else 1
+            latest_finish = max((end for _, end in schedules[vehicle.vehicle_id]), default=0.0)
+            score = (
+                already_used,
+                latest_finish,
+                evaluation.cost.total_cost,
+                vehicle.vehicle_type.type_id,
+                vehicle.vehicle_id,
+            )
+            if chosen_score is None or score < chosen_score:
+                chosen_vehicle = vehicle
+                chosen_eval = evaluation
+                chosen_score = score
+
+        if chosen_vehicle is None or chosen_eval is None:
+            return False
+
+        route.vehicle_id = chosen_vehicle.vehicle_id
+        route.vehicle_type_id = chosen_vehicle.vehicle_type.type_id
+        schedules[route.vehicle_id].append((float(route.departure_min), chosen_eval.return_to_depot_min))
+        schedules[route.vehicle_id].sort()
+
+    return True
+
+
+def has_vehicle_schedule_conflict(
+    routes: Sequence[Route],
+    route_evaluations: dict[str, RouteEvaluation],
+    route_evaluator,
+    allow_vehicle_reuse: bool = True,
+    turnaround_min: float = 0.0,
+) -> bool:
+    """检查同一真实车辆是否被安排了冲突路线。"""
+
+    grouped: dict[str, list[tuple[float, float]]] = defaultdict(list)
+    for index, route in enumerate(routes, start=1):
+        if route.vehicle_id not in route_evaluator.vehicles:
+            return True
+        evaluation = evaluation_for(route_evaluations, route, index)
+        if evaluation is None:
+            evaluation = route_evaluator.evaluate(route)
+        if not evaluation.feasible or evaluation.return_to_depot_min is None:
+            return True
+        grouped[route.vehicle_id].append((float(route.departure_min), evaluation.return_to_depot_min))
+
+    if not allow_vehicle_reuse:
+        return any(len(schedules) > 1 for schedules in grouped.values())
+
+    for schedules in grouped.values():
+        schedules.sort()
+        for left, right in zip(schedules, schedules[1:]):
+            left_start, left_end = left
+            right_start, right_end = right
+            if _time_windows_overlap(left_start, left_end, right_start, right_end, turnaround_min):
+                return True
+    return False
+
+
+def _schedule_can_accept(
+    schedules: Sequence[tuple[float, float]],
+    start_min: float,
+    end_min: float,
+    turnaround_min: float,
+) -> bool:
+    return not any(
+        _time_windows_overlap(start_min, end_min, existing_start, existing_end, turnaround_min)
+        for existing_start, existing_end in schedules
+    )
+
+
+def _time_windows_overlap(
+    left_start: float,
+    left_end: float,
+    right_start: float,
+    right_end: float,
+    turnaround_min: float,
+) -> bool:
+    return left_start < right_end + turnaround_min and left_end + turnaround_min > right_start

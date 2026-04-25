@@ -10,7 +10,14 @@ from dataclasses import dataclass
 from .log_utils import log
 from .model import Route, RouteEvaluation, RouteStop, ServiceUnit, Solution, SolutionMetrics, VehicleInstance
 from .route_evaluator import RouteEvaluator
-from .solution_utils import assign_route_ids, build_solution_metrics, evaluation_for, route_key
+from .solution_utils import (
+    assign_reusable_vehicle_schedules,
+    assign_route_ids,
+    build_solution_metrics,
+    evaluation_for,
+    has_vehicle_schedule_conflict,
+    route_key,
+)
 
 
 @dataclass(slots=True)
@@ -45,6 +52,7 @@ class LocalSearchEngine:
     WEIGHT_UPDATE_PERIOD = 25
     RANDOM_SEED = 20260425
     UNASSIGNED_PENALTY = 1_000_000.0
+    SCHEDULE_PENALTY = 1_000_000_000.0
 
     def __init__(self, route_evaluator: RouteEvaluator) -> None:
         self.route_evaluator = route_evaluator
@@ -83,7 +91,8 @@ class LocalSearchEngine:
         """运行一版轻量 ALNS：destroy + repair + 模拟退火接受 + 自适应权重。"""
 
         current = self._clone_solution(solution)
-        self._refresh_solution(current)
+        if not self._refresh_solution(current):
+            log("警告: 初始解真实车辆排班不可行，ALNS 将优先丢弃不可行候选", indent=1)
         best = self._clone_solution(current)
 
         current_cost = self._fitness(current)
@@ -137,14 +146,14 @@ class LocalSearchEngine:
             candidate = self._clone_solution(current)
             removed_units = destroy_ops[destroy_name](candidate, remove_count)
             repair_ops[repair_name](candidate, removed_units)
-            self._refresh_solution(candidate)
+            candidate_ok = self._refresh_solution(candidate)
 
-            if self._should_try_route_elimination(iteration):
-                self._route_elimination_pass(candidate, max_attempts=self.route_elimination_candidates)
+            if candidate_ok and self._should_try_route_elimination(iteration):
+                candidate_ok = self._route_elimination_pass(candidate, max_attempts=self.route_elimination_candidates) or self._solution_schedule_ok(candidate)
 
             candidate_cost = self._fitness(candidate)
             delta = candidate_cost - current_cost
-            accepted = delta <= 0 or self.random.random() < math.exp(-delta / max(temperature, 1e-9))
+            accepted = candidate_ok and (delta <= 0 or self.random.random() < math.exp(-delta / max(temperature, 1e-9)))
 
             reward = 0.0
             if accepted:
@@ -189,7 +198,7 @@ class LocalSearchEngine:
 
             temperature *= cooling_rate
 
-        log("ALNS 后处理: 路线消除、路线内 2-opt、车型重分配", indent=1)
+        log("ALNS 后处理: 路线消除、路线内 2-opt、车型重分配、可选最终暴搜", indent=1)
         for _ in range(max(0, self.post_route_elimination_passes)):
             changed = self._route_elimination_pass(best, max_attempts=max(self.route_elimination_candidates * 2, 1))
             if not changed:
@@ -197,6 +206,18 @@ class LocalSearchEngine:
         self._two_opt_pass(best)
         self._optimize_vehicle_assignment(best)
         self._refresh_solution(best)
+
+        if self._env_int("Q1_ENABLE_FINAL_BRUTE", 0) > 0:
+            from .final_polish import FinalPolisher
+            before_polish = self._clone_solution(best)
+            final_polisher = FinalPolisher(route_evaluator=self.route_evaluator)
+            polished = final_polisher.polish(best)
+            if self._refresh_solution(polished):
+                best = polished
+            else:
+                best = before_polish
+                self._refresh_solution(best)
+                log("最终局部暴搜结果车辆排班不可行，已回退到暴搜前最优解", indent=1)
 
         log(
             f"ALNS 结束: 最优成本 {best.metrics.total_cost:.2f}, 路线 {len(best.routes)} 条, "
@@ -206,24 +227,30 @@ class LocalSearchEngine:
         return best
 
     def try_relocate(self, solution: Solution) -> bool:
-        """最终精修阶段再实现。"""
+        """公开接口：执行一轮轻量 relocate。当前稳定版先返回 False。"""
 
-        raise NotImplementedError("ALNS 版本暂不实现单独 relocate 精修。")
+        self._refresh_solution(solution)
+        return False
 
     def try_swap(self, solution: Solution) -> bool:
-        """最终精修阶段再实现。"""
+        """公开接口：执行一轮轻量 swap。当前稳定版先返回 False。"""
 
-        raise NotImplementedError("ALNS 版本暂不实现单独 swap 精修。")
+        self._refresh_solution(solution)
+        return False
 
     def try_two_opt(self, solution: Solution) -> bool:
-        """最终精修阶段再实现。"""
+        """公开接口：执行路线内 2-opt。"""
 
-        raise NotImplementedError("ALNS 版本暂不实现单独 2-opt 精修。")
+        changed = self._two_opt_pass(solution)
+        self._refresh_solution(solution)
+        return changed
 
     def try_vehicle_reassignment(self, solution: Solution) -> bool:
-        """最终精修阶段再实现。"""
+        """公开接口：执行车型/车辆实例重分配。"""
 
-        raise NotImplementedError("ALNS 版本暂不实现单独车型重分配精修。")
+        changed = self._optimize_vehicle_assignment(solution)
+        self._refresh_solution(solution)
+        return changed
 
     def _destroy_random_removal(self, solution: Solution, remove_count: int) -> list[ServiceUnit]:
         served_unit_ids = self._served_unit_ids(solution)
@@ -645,7 +672,8 @@ class LocalSearchEngine:
         if max_attempts <= 0 or len(solution.routes) <= 1:
             return False
 
-        self._refresh_solution(solution)
+        if not self._refresh_solution(solution):
+            return False
         base_fitness = self._fitness(solution)
         candidate_route_indexes = sorted(
             range(len(solution.routes)),
@@ -666,12 +694,14 @@ class LocalSearchEngine:
                 if unit_id in self.route_evaluator.service_units
             ]
             trial.route_evaluations.pop(route_key(removed_route), None)
-            self._refresh_solution(trial)
+            if not self._refresh_solution(trial):
+                continue
 
             if not self._repair_regret2_existing_routes(trial, removed_units):
                 continue
 
-            self._refresh_solution(trial)
+            if not self._refresh_solution(trial):
+                continue
             trial_fitness = self._fitness(trial)
             if len(trial.unassigned_units) == 0 and trial_fitness + 1e-6 < base_fitness:
                 old_routes = len(solution.routes)
@@ -796,8 +826,10 @@ class LocalSearchEngine:
 
         if self.allow_vehicle_reuse:
             before = solution.metrics.total_cost
-            self._assign_reusable_vehicle_schedules(solution.routes)
-            self._refresh_solution(solution)
+            if not self._assign_reusable_vehicle_schedules(solution.routes):
+                return False
+            if not self._refresh_solution(solution):
+                return False
             return solution.metrics.total_cost + 1e-6 < before
 
         if not solution.routes:
@@ -967,60 +999,14 @@ class LocalSearchEngine:
 
         return True
 
-    def _assign_reusable_vehicle_schedules(self, routes: Sequence[Route]) -> None:
-        """固定车型，给每条路线重新安排可复用的真实车辆实例。"""
-
-        vehicles_by_type: dict[int, list[VehicleInstance]] = defaultdict(list)
-        for vehicle in self.route_evaluator.vehicles.values():
-            vehicles_by_type[vehicle.vehicle_type.type_id].append(vehicle)
-        for vehicles in vehicles_by_type.values():
-            vehicles.sort(key=lambda vehicle: vehicle.vehicle_id)
-
-        schedules: dict[str, list[tuple[float, float]]] = defaultdict(list)
-        for route in sorted(routes, key=lambda item: (item.departure_min, item.route_id, item.vehicle_id)):
-            candidate_vehicles = vehicles_by_type.get(route.vehicle_type_id, [])
-            if not candidate_vehicles:
-                continue
-
-            chosen_vehicle: VehicleInstance | None = None
-            chosen_eval: RouteEvaluation | None = None
-            chosen_score: tuple[int, float, str] | None = None
-
-            for vehicle in candidate_vehicles:
-                candidate_route = Route(
-                    vehicle_id=vehicle.vehicle_id,
-                    vehicle_type_id=vehicle.vehicle_type.type_id,
-                    departure_min=route.departure_min,
-                    stops=route.stops,
-                    route_id=route.route_id,
-                )
-                evaluation = self.route_evaluator.evaluate(candidate_route)
-                if not evaluation.feasible or evaluation.return_to_depot_min is None:
-                    continue
-                if not self._schedule_can_accept(
-                    schedules=schedules[vehicle.vehicle_id],
-                    start_min=float(route.departure_min),
-                    end_min=evaluation.return_to_depot_min,
-                ):
-                    continue
-
-                score = (
-                    0 if schedules[vehicle.vehicle_id] else 1,
-                    self._latest_finish(schedules[vehicle.vehicle_id]),
-                    vehicle.vehicle_id,
-                )
-                if chosen_score is None or score < chosen_score:
-                    chosen_vehicle = vehicle
-                    chosen_eval = evaluation
-                    chosen_score = score
-
-            if chosen_vehicle is None or chosen_eval is None:
-                continue
-
-            route.vehicle_id = chosen_vehicle.vehicle_id
-            route.vehicle_type_id = chosen_vehicle.vehicle_type.type_id
-            schedules[route.vehicle_id].append((float(route.departure_min), chosen_eval.return_to_depot_min))
-            schedules[route.vehicle_id].sort()
+    def _assign_reusable_vehicle_schedules(self, routes: Sequence[Route]) -> bool:
+        """给每条路线重新安排可复用的真实车辆实例。"""
+        return assign_reusable_vehicle_schedules(
+            routes=routes,
+            vehicles_by_id=self.route_evaluator.vehicles,
+            route_evaluator=self.route_evaluator,
+            turnaround_min=self.vehicle_turnaround_min,
+        )
 
     def _schedule_can_accept(
         self,
@@ -1051,16 +1037,18 @@ class LocalSearchEngine:
             return 0.0
         return max(end for _, end in schedules)
 
-    def _refresh_solution(self, solution: Solution) -> None:
+    def _refresh_solution(self, solution: Solution) -> bool:
         self._drop_empty_routes(solution)
         assign_route_ids(solution.routes, prefix="L")
+        schedule_ok = True
         if self.allow_vehicle_reuse:
-            self._assign_reusable_vehicle_schedules(solution.routes)
+            schedule_ok = self._assign_reusable_vehicle_schedules(solution.routes)
         evaluations: dict[str, RouteEvaluation] = {}
         for index, route in enumerate(solution.routes, start=1):
             evaluations[route_key(route, index)] = self.route_evaluator.evaluate(route)
         solution.route_evaluations = evaluations
         solution.metrics = self._build_metrics(solution.routes, evaluations, solution.unassigned_units)
+        return schedule_ok and self._solution_schedule_ok(solution)
 
     def _build_metrics(
         self,
@@ -1121,7 +1109,23 @@ class LocalSearchEngine:
         ]
 
     def _fitness(self, solution: Solution) -> float:
-        return solution.metrics.total_cost + self.UNASSIGNED_PENALTY * len(solution.unassigned_units)
+        schedule_penalty = self.SCHEDULE_PENALTY if not self._solution_schedule_ok(solution) else 0.0
+        return (
+            solution.metrics.total_cost
+            + self.UNASSIGNED_PENALTY * len(solution.unassigned_units)
+            + schedule_penalty
+        )
+
+    def _solution_schedule_ok(self, solution: Solution) -> bool:
+        if not solution.routes:
+            return True
+        return not has_vehicle_schedule_conflict(
+            routes=solution.routes,
+            route_evaluations=solution.route_evaluations,
+            route_evaluator=self.route_evaluator,
+            allow_vehicle_reuse=self.allow_vehicle_reuse,
+            turnaround_min=self.vehicle_turnaround_min,
+        )
 
     def _draw_remove_count(self, solution: Solution) -> int:
         served_count = len(self._served_unit_ids(solution))

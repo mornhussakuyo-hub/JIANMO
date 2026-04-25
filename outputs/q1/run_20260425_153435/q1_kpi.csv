@@ -1,0 +1,2 @@
+﻿total_cost,total_distance_km,startup_cost_unique_vehicle,total_energy_cost,total_carbon_cost,total_waiting_cost,total_late_cost,route_count,used_vehicle_count,unassigned_unit_count,vehicle_type_route_count,vehicle_type_used_count
+49261.908971,11936.366881,19600.0,22334.517814,4819.230144,1008.412646,1499.748368,101,49,0,"{""1"": 77, ""4"": 24}","{""1"": 39, ""4"": 10}"
