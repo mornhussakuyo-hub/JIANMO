@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from .log_utils import log
 from .model import Route, RouteEvaluation, RouteStop, ServiceUnit, Solution, SolutionMetrics, VehicleInstance
 from .route_evaluator import RouteEvaluator
+from .solution_utils import assign_route_ids, build_solution_metrics, evaluation_for, route_key
 
 
 @dataclass(slots=True)
@@ -73,6 +74,8 @@ class LocalSearchEngine:
         )
         self.post_2opt_passes = self._env_int("Q1_POST_2OPT_PASSES", self.DEFAULT_POST_2OPT_PASSES)
         self.enable_related_route_removal = self._env_int("Q1_ALNS_ENABLE_RELATED_ROUTE_REMOVAL", 0) > 0
+        self.allow_vehicle_reuse = os.environ.get("Q1_ALLOW_VEHICLE_REUSE", "1") != "0"
+        self.vehicle_turnaround_min = self._env_float("Q1_VEHICLE_TURNAROUND_MIN", 0.0)
         self.random_seed = self._env_int("Q1_ALNS_RANDOM_SEED", self.RANDOM_SEED)
         self.random = random.Random(self.random_seed)
 
@@ -120,7 +123,9 @@ class LocalSearchEngine:
             f"route_elimination_period={self.route_elimination_period}, "
             f"route_elimination_candidates={self.route_elimination_candidates}, "
             f"post_route_elimination_passes={self.post_route_elimination_passes}, "
-            f"related_route_removal={self.enable_related_route_removal}, seed={self.random_seed}",
+            f"related_route_removal={self.enable_related_route_removal}, "
+            f"vehicle_reuse={self.allow_vehicle_reuse}, turnaround={self.vehicle_turnaround_min:.1f}min, "
+            f"seed={self.random_seed}",
             indent=2,
         )
 
@@ -234,7 +239,7 @@ class LocalSearchEngine:
 
         route_scores: list[tuple[float, int]] = []
         for index, route in enumerate(solution.routes):
-            evaluation = solution.route_evaluations.get(route.vehicle_id) or self.route_evaluator.evaluate(route)
+            evaluation = evaluation_for(solution.route_evaluations, route, index) or self.route_evaluator.evaluate(route)
             unit_count = max(1, sum(len(stop.service_unit_ids) for stop in route.stops))
             route_scores.append((evaluation.cost.total_cost / unit_count, index))
 
@@ -353,7 +358,7 @@ class LocalSearchEngine:
         moves: list[InsertionMove] = []
 
         for route_index, route in self._candidate_routes_for_unit(solution, unit):
-            old_eval = solution.route_evaluations.get(route.vehicle_id) or self.route_evaluator.evaluate(route)
+            old_eval = evaluation_for(solution.route_evaluations, route, route_index) or self.route_evaluator.evaluate(route)
             positions = self._candidate_insert_positions(route, unit)
 
             for position in positions:
@@ -427,15 +432,18 @@ class LocalSearchEngine:
 
     def _best_new_route_move(self, solution: Solution, unit: ServiceUnit) -> InsertionMove | None:
         used_vehicle_ids = {route.vehicle_id for route in solution.routes}
-        unused_vehicles = [
-            vehicle
-            for vehicle in self.route_evaluator.vehicles.values()
-            if vehicle.vehicle_id not in used_vehicle_ids
-        ]
-        unused_vehicles.sort(key=self._vehicle_opening_key)
+        if self.allow_vehicle_reuse:
+            candidate_vehicles = list(self.route_evaluator.vehicles.values())
+        else:
+            candidate_vehicles = [
+                vehicle
+                for vehicle in self.route_evaluator.vehicles.values()
+                if vehicle.vehicle_id not in used_vehicle_ids
+            ]
+        candidate_vehicles.sort(key=self._vehicle_opening_key)
 
         best_move: InsertionMove | None = None
-        for vehicle in unused_vehicles:
+        for vehicle in candidate_vehicles:
             if unit.weight > vehicle.vehicle_type.max_weight + 1e-9:
                 continue
             if unit.volume > vehicle.vehicle_type.max_volume + 1e-9:
@@ -457,6 +465,17 @@ class LocalSearchEngine:
             route, evaluation = self._retime_route(route)
             if not evaluation.feasible:
                 continue
+            if self.allow_vehicle_reuse and not self._vehicle_can_take_route(solution, route, evaluation):
+                continue
+
+            delta_cost = evaluation.cost.total_cost
+            if self.allow_vehicle_reuse and vehicle.vehicle_id in used_vehicle_ids:
+                delta_cost = (
+                    evaluation.cost.energy_cost
+                    + evaluation.cost.carbon_cost
+                    + evaluation.cost.waiting_cost
+                    + evaluation.cost.late_cost
+                )
 
             move = InsertionMove(
                 unit=unit,
@@ -464,7 +483,7 @@ class LocalSearchEngine:
                 insert_position=0,
                 route=route,
                 evaluation=evaluation,
-                delta_cost=evaluation.cost.total_cost,
+                delta_cost=delta_cost,
             )
             if best_move is None or move.delta_cost < best_move.delta_cost:
                 best_move = move
@@ -473,10 +492,12 @@ class LocalSearchEngine:
 
     def _apply_insertion_move(self, solution: Solution, move: InsertionMove) -> None:
         if move.route_index is None:
+            if not move.route.route_id:
+                move.route.route_id = f"L{len(solution.routes) + 1:04d}"
             solution.routes.append(move.route)
         else:
             solution.routes[move.route_index] = move.route
-        solution.route_evaluations[move.route.vehicle_id] = move.evaluation
+        solution.route_evaluations[route_key(move.route)] = move.evaluation
 
     def _remove_unit_ids(self, solution: Solution, unit_ids: Sequence[str]) -> list[ServiceUnit]:
         removed_units: list[ServiceUnit] = []
@@ -515,7 +536,7 @@ class LocalSearchEngine:
             if not any(unit_id in stop.service_unit_ids for stop in route.stops):
                 continue
 
-            old_eval = solution.route_evaluations.get(route.vehicle_id) or self.route_evaluator.evaluate(route)
+            old_eval = evaluation_for(solution.route_evaluations, route) or self.route_evaluator.evaluate(route)
             new_route = self._clone_route(route)
             temp_solution = Solution(routes=[new_route])
             if not self._remove_unit_from_routes(temp_solution, unit):
@@ -546,7 +567,7 @@ class LocalSearchEngine:
                 stop.service_unit_ids.append(unit.unit_id)
                 stop.delivered_weight += unit.weight
                 stop.delivered_volume += unit.volume
-                return Route(route.vehicle_id, route.vehicle_type_id, route.departure_min, new_stops)
+                return Route(route.vehicle_id, route.vehicle_type_id, route.departure_min, new_stops, route.route_id)
 
         insert_position = max(0, min(insert_position, len(new_stops)))
         new_stops.insert(
@@ -558,7 +579,7 @@ class LocalSearchEngine:
                 delivered_volume=unit.volume,
             ),
         )
-        return Route(route.vehicle_id, route.vehicle_type_id, route.departure_min, new_stops)
+        return Route(route.vehicle_id, route.vehicle_type_id, route.departure_min, new_stops, route.route_id)
 
     def _retime_route(self, route: Route) -> tuple[Route, RouteEvaluation]:
         candidates = self._departure_candidates(route)
@@ -566,7 +587,7 @@ class LocalSearchEngine:
         best_eval = self.route_evaluator.evaluate(route)
 
         for departure_min in candidates:
-            candidate_route = Route(route.vehicle_id, route.vehicle_type_id, departure_min, route.stops)
+            candidate_route = Route(route.vehicle_id, route.vehicle_type_id, departure_min, route.stops, route.route_id)
             evaluation = self.route_evaluator.evaluate(candidate_route)
             if not evaluation.feasible:
                 continue
@@ -576,7 +597,7 @@ class LocalSearchEngine:
 
         fine_candidates = range(max(480, best_route.departure_min - 10), best_route.departure_min + 11)
         for departure_min in fine_candidates:
-            candidate_route = Route(route.vehicle_id, route.vehicle_type_id, departure_min, route.stops)
+            candidate_route = Route(route.vehicle_id, route.vehicle_type_id, departure_min, route.stops, route.route_id)
             evaluation = self.route_evaluator.evaluate(candidate_route)
             if not evaluation.feasible:
                 continue
@@ -644,7 +665,7 @@ class LocalSearchEngine:
                 for unit_id in stop.service_unit_ids
                 if unit_id in self.route_evaluator.service_units
             ]
-            trial.route_evaluations.pop(removed_route.vehicle_id, None)
+            trial.route_evaluations.pop(route_key(removed_route), None)
             self._refresh_solution(trial)
 
             if not self._repair_regret2_existing_routes(trial, removed_units):
@@ -704,7 +725,7 @@ class LocalSearchEngine:
             total_volume / max(vehicle.vehicle_type.max_volume, 1e-9),
         )
         unit_count = sum(len(stop.service_unit_ids) for stop in route.stops)
-        evaluation = solution.route_evaluations.get(route.vehicle_id) or self.route_evaluator.evaluate(route)
+        evaluation = evaluation_for(solution.route_evaluations, route, route_index) or self.route_evaluator.evaluate(route)
         return (load_ratio, unit_count, -evaluation.cost.total_cost, route_index)
 
     def _two_opt_pass(self, solution: Solution) -> bool:
@@ -720,7 +741,7 @@ class LocalSearchEngine:
                 if len(route.stops) < 4 or len(route.stops) > self.post_2opt_max_route_size:
                     continue
 
-                old_eval = solution.route_evaluations.get(route.vehicle_id) or self.route_evaluator.evaluate(route)
+                old_eval = evaluation_for(solution.route_evaluations, route, route_index) or self.route_evaluator.evaluate(route)
                 best_route = route
                 best_eval = old_eval
 
@@ -744,6 +765,7 @@ class LocalSearchEngine:
                                 )
                                 for stop in candidate_stops
                             ],
+                            route_id=route.route_id,
                         )
                         candidate_route, candidate_eval = self._retime_route(candidate_route)
                         if not candidate_eval.feasible:
@@ -754,7 +776,7 @@ class LocalSearchEngine:
 
                 if best_route is not route:
                     solution.routes[route_index] = best_route
-                    solution.route_evaluations[best_route.vehicle_id] = best_eval
+                    solution.route_evaluations[route_key(best_route)] = best_eval
                     pass_improved = True
                     improved = True
 
@@ -771,6 +793,12 @@ class LocalSearchEngine:
 
     def _optimize_vehicle_assignment(self, solution: Solution) -> bool:
         """固定路线顺序，重新给路线分配更合适的车辆类型和实例。"""
+
+        if self.allow_vehicle_reuse:
+            before = solution.metrics.total_cost
+            self._assign_reusable_vehicle_schedules(solution.routes)
+            self._refresh_solution(solution)
+            return solution.metrics.total_cost + 1e-6 < before
 
         if not solution.routes:
             return False
@@ -861,7 +889,7 @@ class LocalSearchEngine:
                 return False
 
             assigned_routes[route_index] = route
-            assigned_evaluations[route.vehicle_id] = evaluation
+            assigned_evaluations[route_key(route)] = evaluation
 
         trial = Solution(
             routes=[route for route in assigned_routes if route is not None],
@@ -909,11 +937,128 @@ class LocalSearchEngine:
             for right_stop in right.stops
         )
 
+    def _vehicle_can_take_route(
+        self,
+        solution: Solution,
+        route: Route,
+        evaluation: RouteEvaluation,
+    ) -> bool:
+        if evaluation.return_to_depot_min is None:
+            return False
+
+        start_min = float(route.departure_min)
+        end_min = evaluation.return_to_depot_min
+        for existing_route in solution.routes:
+            if existing_route.vehicle_id != route.vehicle_id:
+                continue
+            if route.route_id and existing_route.route_id == route.route_id:
+                continue
+
+            existing_eval = evaluation_for(solution.route_evaluations, existing_route)
+            if existing_eval is None or existing_eval.return_to_depot_min is None:
+                existing_eval = self.route_evaluator.evaluate(existing_route)
+            if self._time_windows_overlap(
+                start_min,
+                end_min,
+                float(existing_route.departure_min),
+                existing_eval.return_to_depot_min,
+            ):
+                return False
+
+        return True
+
+    def _assign_reusable_vehicle_schedules(self, routes: Sequence[Route]) -> None:
+        """固定车型，给每条路线重新安排可复用的真实车辆实例。"""
+
+        vehicles_by_type: dict[int, list[VehicleInstance]] = defaultdict(list)
+        for vehicle in self.route_evaluator.vehicles.values():
+            vehicles_by_type[vehicle.vehicle_type.type_id].append(vehicle)
+        for vehicles in vehicles_by_type.values():
+            vehicles.sort(key=lambda vehicle: vehicle.vehicle_id)
+
+        schedules: dict[str, list[tuple[float, float]]] = defaultdict(list)
+        for route in sorted(routes, key=lambda item: (item.departure_min, item.route_id, item.vehicle_id)):
+            candidate_vehicles = vehicles_by_type.get(route.vehicle_type_id, [])
+            if not candidate_vehicles:
+                continue
+
+            chosen_vehicle: VehicleInstance | None = None
+            chosen_eval: RouteEvaluation | None = None
+            chosen_score: tuple[int, float, str] | None = None
+
+            for vehicle in candidate_vehicles:
+                candidate_route = Route(
+                    vehicle_id=vehicle.vehicle_id,
+                    vehicle_type_id=vehicle.vehicle_type.type_id,
+                    departure_min=route.departure_min,
+                    stops=route.stops,
+                    route_id=route.route_id,
+                )
+                evaluation = self.route_evaluator.evaluate(candidate_route)
+                if not evaluation.feasible or evaluation.return_to_depot_min is None:
+                    continue
+                if not self._schedule_can_accept(
+                    schedules=schedules[vehicle.vehicle_id],
+                    start_min=float(route.departure_min),
+                    end_min=evaluation.return_to_depot_min,
+                ):
+                    continue
+
+                score = (
+                    0 if schedules[vehicle.vehicle_id] else 1,
+                    self._latest_finish(schedules[vehicle.vehicle_id]),
+                    vehicle.vehicle_id,
+                )
+                if chosen_score is None or score < chosen_score:
+                    chosen_vehicle = vehicle
+                    chosen_eval = evaluation
+                    chosen_score = score
+
+            if chosen_vehicle is None or chosen_eval is None:
+                continue
+
+            route.vehicle_id = chosen_vehicle.vehicle_id
+            route.vehicle_type_id = chosen_vehicle.vehicle_type.type_id
+            schedules[route.vehicle_id].append((float(route.departure_min), chosen_eval.return_to_depot_min))
+            schedules[route.vehicle_id].sort()
+
+    def _schedule_can_accept(
+        self,
+        schedules: Sequence[tuple[float, float]],
+        start_min: float,
+        end_min: float,
+    ) -> bool:
+        return not any(
+            self._time_windows_overlap(start_min, end_min, existing_start, existing_end)
+            for existing_start, existing_end in schedules
+        )
+
+    def _time_windows_overlap(
+        self,
+        left_start: float,
+        left_end: float,
+        right_start: float,
+        right_end: float,
+    ) -> bool:
+        return (
+            left_start < right_end + self.vehicle_turnaround_min
+            and left_end + self.vehicle_turnaround_min > right_start
+        )
+
+    @staticmethod
+    def _latest_finish(schedules: Sequence[tuple[float, float]]) -> float:
+        if not schedules:
+            return 0.0
+        return max(end for _, end in schedules)
+
     def _refresh_solution(self, solution: Solution) -> None:
         self._drop_empty_routes(solution)
+        assign_route_ids(solution.routes, prefix="L")
+        if self.allow_vehicle_reuse:
+            self._assign_reusable_vehicle_schedules(solution.routes)
         evaluations: dict[str, RouteEvaluation] = {}
-        for route in solution.routes:
-            evaluations[route.vehicle_id] = self.route_evaluator.evaluate(route)
+        for index, route in enumerate(solution.routes, start=1):
+            evaluations[route_key(route, index)] = self.route_evaluator.evaluate(route)
         solution.route_evaluations = evaluations
         solution.metrics = self._build_metrics(solution.routes, evaluations, solution.unassigned_units)
 
@@ -923,20 +1068,12 @@ class LocalSearchEngine:
         route_evaluations: dict[str, RouteEvaluation],
         unassigned_units: Sequence[ServiceUnit],
     ) -> SolutionMetrics:
-        metrics = SolutionMetrics()
-        metrics.used_vehicle_count = len(routes)
-        metrics.unassigned_unit_count = len(unassigned_units)
-        for route in routes:
-            evaluation = route_evaluations.get(route.vehicle_id)
-            if evaluation is None:
-                continue
-            metrics.total_cost += evaluation.cost.total_cost
-            metrics.total_energy_cost += evaluation.cost.energy_cost
-            metrics.total_carbon_cost += evaluation.cost.carbon_cost
-            metrics.total_waiting_cost += evaluation.cost.waiting_cost
-            metrics.total_late_cost += evaluation.cost.late_cost
-            metrics.total_distance_km += sum(leg.distance_km for leg in evaluation.leg_records)
-        return metrics
+        return build_solution_metrics(
+            routes=routes,
+            route_evaluations=route_evaluations,
+            unassigned_units=unassigned_units,
+            vehicles_by_id=self.route_evaluator.vehicles,
+        )
 
     def _clone_solution(self, solution: Solution) -> Solution:
         return Solution(
@@ -969,6 +1106,7 @@ class LocalSearchEngine:
                 )
                 for stop in route.stops
             ],
+            route_id=route.route_id,
         )
 
     def _drop_empty_routes(self, solution: Solution) -> None:

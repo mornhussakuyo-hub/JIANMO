@@ -168,6 +168,7 @@ class Route:
     vehicle_type_id: int
     departure_min: int
     stops: list[RouteStop] = field(default_factory=list)
+    route_id: str = ""
 
 
 @dataclass(slots=True)

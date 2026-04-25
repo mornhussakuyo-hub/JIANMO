@@ -3,10 +3,12 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
+import os
 
 from .log_utils import log
 from .model import Route, RouteEvaluation, RouteStop, ServiceUnit, Solution, SolutionMetrics, VehicleInstance
 from .route_evaluator import RouteEvaluator
+from .solution_utils import assign_route_ids, build_solution_metrics, route_key
 
 
 @dataclass(slots=True)
@@ -51,6 +53,8 @@ class SplitDPBuilder:
     def __init__(self, route_evaluator: RouteEvaluator) -> None:
         self.route_evaluator = route_evaluator
         self._route_cost_cache: dict[tuple[str, ...], list[SplitRouteCandidate]] = {}
+        self.allow_vehicle_reuse = os.environ.get("Q1_ALLOW_VEHICLE_REUSE", "1") != "0"
+        self.vehicle_turnaround_min = float(os.environ.get("Q1_VEHICLE_TURNAROUND_MIN", "0"))
 
     def build_solution(
         self,
@@ -77,9 +81,13 @@ class SplitDPBuilder:
             for type_id, vehicle_list in vehicles_by_type.items()
             if type_id not in small_vehicle_type_ids
         )
+        if self.allow_vehicle_reuse:
+            large_vehicle_limit = 10_000
+            non_small_vehicle_limit = 10_000
         log(
             f"车辆资源识别: 大车车型 {sorted(large_vehicle_type_ids)} 上限 {large_vehicle_limit}, "
-            f"小车车型 {sorted(small_vehicle_type_ids)}, 非小车资源上限 {non_small_vehicle_limit}",
+            f"小车车型 {sorted(small_vehicle_type_ids)}, 非小车资源上限 {non_small_vehicle_limit}, "
+            f"车辆复用 {self.allow_vehicle_reuse}",
             indent=4,
         )
 
@@ -304,6 +312,7 @@ class SplitDPBuilder:
         """把 DP 弧转成具体车辆路线，若首选车型用完则尝试备用车型。"""
 
         next_vehicle_index = {vehicle_type_id: 0 for vehicle_type_id in vehicles_by_type}
+        vehicle_schedules: dict[str, list[tuple[float, float]]] = defaultdict(list)
         routes: list[Route] = []
         route_evaluations: dict[str, RouteEvaluation] = {}
         assigned_unit_ids: set[str] = set()
@@ -324,12 +333,22 @@ class SplitDPBuilder:
             )
 
             for candidate in ordered_candidates:
-                vehicle_index = next_vehicle_index[candidate.vehicle_type_id]
                 available_vehicles = vehicles_by_type[candidate.vehicle_type_id]
-                if vehicle_index >= len(available_vehicles):
-                    continue
+                if self.allow_vehicle_reuse:
+                    vehicle = self._choose_reusable_vehicle(
+                        available_vehicles=available_vehicles,
+                        route=candidate.route,
+                        evaluation=candidate.evaluation,
+                        vehicle_schedules=vehicle_schedules,
+                    )
+                    if vehicle is None:
+                        continue
+                else:
+                    vehicle_index = next_vehicle_index[candidate.vehicle_type_id]
+                    if vehicle_index >= len(available_vehicles):
+                        continue
+                    vehicle = available_vehicles[vehicle_index]
 
-                vehicle = available_vehicles[vehicle_index]
                 route = Route(
                     vehicle_id=vehicle.vehicle_id,
                     vehicle_type_id=vehicle.vehicle_type.type_id,
@@ -343,14 +362,18 @@ class SplitDPBuilder:
                         )
                         for stop in candidate.route.stops
                     ],
+                    route_id=f"S{len(routes) + 1:04d}",
                 )
                 evaluation = self.route_evaluator.evaluate(route)
                 if not evaluation.feasible:
                     continue
 
-                next_vehicle_index[candidate.vehicle_type_id] += 1
+                if self.allow_vehicle_reuse:
+                    self._add_vehicle_schedule(vehicle_schedules, route.vehicle_id, route, evaluation)
+                else:
+                    next_vehicle_index[candidate.vehicle_type_id] += 1
                 routes.append(route)
-                route_evaluations[route.vehicle_id] = evaluation
+                route_evaluations[route_key(route)] = evaluation
                 for stop in route.stops:
                     assigned_unit_ids.update(stop.service_unit_ids)
                 assigned = True
@@ -371,6 +394,13 @@ class SplitDPBuilder:
                 )
 
         unassigned_units = [unit for unit in all_units if unit.unit_id not in assigned_unit_ids]
+        assign_route_ids(routes, prefix="S")
+        if self.allow_vehicle_reuse:
+            self._reassign_reusable_vehicle_schedules(routes)
+            route_evaluations = {
+                route_key(route, index): self.route_evaluator.evaluate(route)
+                for index, route in enumerate(routes, start=1)
+            }
         solution = Solution(
             routes=routes,
             unassigned_units=unassigned_units,
@@ -383,6 +413,116 @@ class SplitDPBuilder:
             indent=4,
         )
         return solution
+
+    def _choose_reusable_vehicle(
+        self,
+        available_vehicles: Sequence[VehicleInstance],
+        route: Route,
+        evaluation: RouteEvaluation,
+        vehicle_schedules: dict[str, list[tuple[float, float]]],
+    ) -> VehicleInstance | None:
+        """在同车型车辆中选择一辆日程不冲突的真实车辆。"""
+
+        if evaluation.return_to_depot_min is None:
+            return None
+
+        best_vehicle: VehicleInstance | None = None
+        best_score: tuple[int, float, str] | None = None
+        for vehicle in available_vehicles:
+            if not self._schedule_can_accept(
+                schedules=vehicle_schedules[vehicle.vehicle_id],
+                start_min=float(route.departure_min),
+                end_min=evaluation.return_to_depot_min,
+            ):
+                continue
+
+            score = (
+                0 if vehicle_schedules[vehicle.vehicle_id] else 1,
+                self._latest_finish(vehicle_schedules[vehicle.vehicle_id]),
+                vehicle.vehicle_id,
+            )
+            if best_score is None or score < best_score:
+                best_vehicle = vehicle
+                best_score = score
+
+        return best_vehicle
+
+    def _schedule_can_accept(
+        self,
+        schedules: Sequence[tuple[float, float]],
+        start_min: float,
+        end_min: float,
+    ) -> bool:
+        for existing_start, existing_end in schedules:
+            if start_min < existing_end + self.vehicle_turnaround_min and end_min + self.vehicle_turnaround_min > existing_start:
+                return False
+        return True
+
+    @staticmethod
+    def _latest_finish(schedules: Sequence[tuple[float, float]]) -> float:
+        if not schedules:
+            return 0.0
+        return max(end for _, end in schedules)
+
+    def _add_vehicle_schedule(
+        self,
+        vehicle_schedules: dict[str, list[tuple[float, float]]],
+        vehicle_id: str,
+        route: Route,
+        evaluation: RouteEvaluation,
+    ) -> None:
+        if evaluation.return_to_depot_min is None:
+            return
+        vehicle_schedules[vehicle_id].append((float(route.departure_min), evaluation.return_to_depot_min))
+        vehicle_schedules[vehicle_id].sort()
+
+    def _reassign_reusable_vehicle_schedules(self, routes: Sequence[Route]) -> None:
+        """落车结束后按时间顺序重新压缩真实车辆使用数。"""
+
+        vehicles_by_type = self._vehicles_by_type(self.route_evaluator.vehicles.values())
+        schedules: dict[str, list[tuple[float, float]]] = defaultdict(list)
+
+        for route in sorted(routes, key=lambda item: (item.departure_min, item.route_id, item.vehicle_id)):
+            available_vehicles = vehicles_by_type.get(route.vehicle_type_id, [])
+            chosen_vehicle: VehicleInstance | None = None
+            chosen_eval: RouteEvaluation | None = None
+            chosen_score: tuple[int, float, str] | None = None
+
+            for vehicle in available_vehicles:
+                candidate_route = Route(
+                    vehicle_id=vehicle.vehicle_id,
+                    vehicle_type_id=vehicle.vehicle_type.type_id,
+                    departure_min=route.departure_min,
+                    stops=route.stops,
+                    route_id=route.route_id,
+                )
+                evaluation = self.route_evaluator.evaluate(candidate_route)
+                if not evaluation.feasible or evaluation.return_to_depot_min is None:
+                    continue
+                if not self._schedule_can_accept(
+                    schedules=schedules[vehicle.vehicle_id],
+                    start_min=float(route.departure_min),
+                    end_min=evaluation.return_to_depot_min,
+                ):
+                    continue
+
+                score = (
+                    0 if schedules[vehicle.vehicle_id] else 1,
+                    self._latest_finish(schedules[vehicle.vehicle_id]),
+                    vehicle.vehicle_id,
+                )
+                if chosen_score is None or score < chosen_score:
+                    chosen_vehicle = vehicle
+                    chosen_eval = evaluation
+                    chosen_score = score
+
+            if chosen_vehicle is None or chosen_eval is None:
+                continue
+
+            route.vehicle_id = chosen_vehicle.vehicle_id
+            route.vehicle_type_id = chosen_vehicle.vehicle_type.type_id
+            schedules[route.vehicle_id].append((float(route.departure_min), chosen_eval.return_to_depot_min))
+            schedules[route.vehicle_id].sort()
 
     def _vehicles_by_type(self, vehicles: Sequence[VehicleInstance]) -> dict[int, list[VehicleInstance]]:
         grouped: dict[int, list[VehicleInstance]] = defaultdict(list)
@@ -456,6 +596,7 @@ class SplitDPBuilder:
                 vehicle_type_id=route.vehicle_type_id,
                 departure_min=departure_min,
                 stops=route.stops,
+                route_id=route.route_id,
             )
             evaluation = self.route_evaluator.evaluate(candidate_route)
             if not evaluation.feasible:
@@ -471,6 +612,7 @@ class SplitDPBuilder:
                 vehicle_type_id=route.vehicle_type_id,
                 departure_min=departure_min,
                 stops=route.stops,
+                route_id=route.route_id,
             )
             evaluation = self.route_evaluator.evaluate(candidate_route)
             if not evaluation.feasible:
@@ -517,17 +659,9 @@ class SplitDPBuilder:
         route_evaluations: dict[str, RouteEvaluation],
         unassigned_units: Sequence[ServiceUnit],
     ) -> SolutionMetrics:
-        metrics = SolutionMetrics()
-        metrics.used_vehicle_count = len(routes)
-        metrics.unassigned_unit_count = len(unassigned_units)
-        for route in routes:
-            evaluation = route_evaluations.get(route.vehicle_id)
-            if evaluation is None:
-                continue
-            metrics.total_cost += evaluation.cost.total_cost
-            metrics.total_energy_cost += evaluation.cost.energy_cost
-            metrics.total_carbon_cost += evaluation.cost.carbon_cost
-            metrics.total_waiting_cost += evaluation.cost.waiting_cost
-            metrics.total_late_cost += evaluation.cost.late_cost
-            metrics.total_distance_km += sum(leg.distance_km for leg in evaluation.leg_records)
-        return metrics
+        return build_solution_metrics(
+            routes=routes,
+            route_evaluations=route_evaluations,
+            unassigned_units=unassigned_units,
+            vehicles_by_id=self.route_evaluator.vehicles,
+        )

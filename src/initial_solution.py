@@ -16,6 +16,7 @@ from .model import (
 )
 from .log_utils import log
 from .route_evaluator import RouteEvaluator
+from .solution_utils import assign_route_ids, build_solution_metrics, route_key
 from .split_dp import SplitDPBuilder
 
 
@@ -292,7 +293,7 @@ class InitialSolutionBuilder:
                 updated_route, evaluation = self._retime_route(updated_route)
 
                 routes[best_route_index] = updated_route
-                route_evaluations[updated_route.vehicle_id] = evaluation
+                route_evaluations[route_key(updated_route)] = evaluation
                 if index == 1 or index % 25 == 0 or index == len(service_units):
                     log(
                         f"顺序插入进度 {index}/{len(service_units)}: "
@@ -313,8 +314,9 @@ class InitialSolutionBuilder:
                 continue
 
             new_route, evaluation, used_vehicle_id = new_route_result
+            new_route.route_id = f"I{len(routes) + 1:04d}"
             routes.append(new_route)
-            route_evaluations[new_route.vehicle_id] = evaluation
+            route_evaluations[route_key(new_route)] = evaluation
             unused_vehicles = [vehicle for vehicle in unused_vehicles if vehicle.vehicle_id != used_vehicle_id]
 
             if index == 1 or index % 25 == 0 or index == len(service_units):
@@ -324,6 +326,7 @@ class InitialSolutionBuilder:
                     indent=4,
                 )
 
+        assign_route_ids(routes, prefix="I")
         return Solution(
             routes=routes,
             unassigned_units=unassigned_units,
@@ -577,6 +580,7 @@ class InitialSolutionBuilder:
                     vehicle_type_id=route.vehicle_type_id,
                     departure_min=route.departure_min,
                     stops=new_stops,
+                    route_id=route.route_id,
                 )
 
         insert_position = max(0, min(insert_position, len(new_stops)))
@@ -595,6 +599,7 @@ class InitialSolutionBuilder:
             vehicle_type_id=route.vehicle_type_id,
             departure_min=route.departure_min,
             stops=new_stops,
+            route_id=route.route_id,
         )
 
     def _retime_route(self, route: Route) -> tuple[Route, RouteEvaluation]:
@@ -611,6 +616,7 @@ class InitialSolutionBuilder:
                 vehicle_type_id=route.vehicle_type_id,
                 departure_min=departure_min,
                 stops=route.stops,
+                route_id=route.route_id,
             )
             evaluation = self.route_evaluator.evaluate(candidate_route)
             if not evaluation.feasible:
@@ -631,6 +637,7 @@ class InitialSolutionBuilder:
                 vehicle_type_id=route.vehicle_type_id,
                 departure_min=departure_min,
                 stops=route.stops,
+                route_id=route.route_id,
             )
             evaluation = self.route_evaluator.evaluate(candidate_route)
             if not evaluation.feasible:
@@ -683,20 +690,9 @@ class InitialSolutionBuilder:
     ) -> SolutionMetrics:
         """汇总初始解指标。"""
 
-        metrics = SolutionMetrics()
-        metrics.used_vehicle_count = len(routes)
-        metrics.unassigned_unit_count = len(unassigned_units)
-
-        for route in routes:
-            evaluation = route_evaluations.get(route.vehicle_id)
-            if evaluation is None:
-                continue
-
-            metrics.total_cost += evaluation.cost.total_cost
-            metrics.total_energy_cost += evaluation.cost.energy_cost
-            metrics.total_carbon_cost += evaluation.cost.carbon_cost
-            metrics.total_waiting_cost += evaluation.cost.waiting_cost
-            metrics.total_late_cost += evaluation.cost.late_cost
-            metrics.total_distance_km += sum(leg.distance_km for leg in evaluation.leg_records)
-
-        return metrics
+        return build_solution_metrics(
+            routes=routes,
+            route_evaluations=route_evaluations,
+            unassigned_units=unassigned_units,
+            vehicles_by_id=self.route_evaluator.vehicles,
+        )

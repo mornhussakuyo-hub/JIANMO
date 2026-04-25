@@ -23,7 +23,11 @@ def main() -> None:
     log(f"等待成本: {solution.metrics.total_waiting_cost:.2f}", indent=1)
     log(f"迟到成本: {solution.metrics.total_late_cost:.2f}", indent=1)
     log(f"使用车辆数: {solution.metrics.used_vehicle_count}", indent=1)
-    log(f"使用车型分布: {dict(Counter(route.vehicle_type_id for route in solution.routes))}", indent=1)
+    used_vehicle_type_by_id = {}
+    for route in solution.routes:
+        used_vehicle_type_by_id.setdefault(route.vehicle_id, route.vehicle_type_id)
+    log(f"路线车型分布: {dict(Counter(route.vehicle_type_id for route in solution.routes))}", indent=1)
+    log(f"使用车型分布: {dict(Counter(used_vehicle_type_by_id.values()))}", indent=1)
 
     if solution.unassigned_units:
         log("未分配任务列表:", indent=1)
