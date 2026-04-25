@@ -128,7 +128,7 @@ def assign_reusable_vehicle_schedules(
         chosen_eval: RouteEvaluation | None = None
         chosen_departure_min: int | None = None
         chosen_score: tuple[float, float, float, int, int, str] | None = None
-        departure_candidates = _departure_candidates_for_schedule(route, route_evaluator)
+        departure_candidates = departure_candidates_for_route(route, route_evaluator)
 
         for vehicle in compatible_vehicles:
             for departure_min in departure_candidates:
@@ -230,7 +230,9 @@ def _schedule_can_accept(
     )
 
 
-def _departure_candidates_for_schedule(route: Route, route_evaluator) -> list[int]:
+def departure_candidates_for_route(route: Route, route_evaluator) -> list[int]:
+    """Q2 发车候选集：普通时间窗点 + 绿色准入 16:00 边界附近点。"""
+
     candidates: set[int] = {int(route.departure_min)}
     latest_window_end = 1020
     has_green_stop = False

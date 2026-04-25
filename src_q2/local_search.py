@@ -14,6 +14,7 @@ from .solution_utils import (
     assign_reusable_vehicle_schedules,
     assign_route_ids,
     build_solution_metrics,
+    departure_candidates_for_route,
     evaluation_for,
     has_vehicle_schedule_conflict,
     route_key,
@@ -635,31 +636,7 @@ class LocalSearchEngine:
         return best_route, best_eval
 
     def _departure_candidates(self, route: Route) -> list[int]:
-        latest_window_end = 1020
-        for stop in route.stops:
-            customer = self.route_evaluator.customers[stop.customer_id]
-            latest_window_end = max(latest_window_end, customer.time_window.end_min)
-
-        upper = min(24 * 60 - 1, latest_window_end)
-        candidates: set[int] = set()
-        for value in [480, 540, 600, 690, 780, 900, 1020]:
-            if 480 <= value <= upper:
-                candidates.add(value)
-        for value in range(480, upper + 1, 30):
-            candidates.add(value)
-        for stop in route.stops:
-            customer = self.route_evaluator.customers[stop.customer_id]
-            for value in [
-                customer.time_window.start_min - 120,
-                customer.time_window.start_min - 60,
-                customer.time_window.start_min - 30,
-                customer.time_window.start_min,
-                customer.time_window.end_min - 60,
-                customer.time_window.end_min - 30,
-            ]:
-                if value >= 480:
-                    candidates.add(min(upper, int(value)))
-        return sorted(candidates)
+        return departure_candidates_for_route(route, self.route_evaluator)
 
     def _should_try_route_elimination(self, iteration: int) -> bool:
         if self.route_elimination_period <= 0:
