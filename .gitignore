@@ -3,3 +3,9 @@ __pycache__/
 
 .matplotlib/
 .matplotlib_cache/
+
+# 多核优化指导文档
+多核优化分析.md
+多核优化快速参考.md
+多核优化实施代码.md
+多核优化详细分析.md
