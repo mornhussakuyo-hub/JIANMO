@@ -802,12 +802,21 @@ class LocalSearchEngine:
         """固定路线顺序，重新给路线分配更合适的车辆类型和实例。"""
 
         if self.allow_vehicle_reuse:
-            before = solution.metrics.total_cost
-            if not self._assign_reusable_vehicle_schedules(solution.routes):
+            before = self._fitness(solution)
+            trial = self._clone_solution(solution)
+            if not self._assign_reusable_vehicle_schedules(trial.routes):
                 return False
-            if not self._refresh_solution(solution):
+            if not self._refresh_solution(trial):
                 return False
-            return solution.metrics.total_cost + 1e-6 < before
+            if self._fitness(trial) + 1e-6 < before:
+                old_cost = solution.metrics.total_cost
+                self._replace_solution(solution, trial)
+                log(
+                    f"车型重分配成功: 成本 {old_cost:.2f} -> {solution.metrics.total_cost:.2f}",
+                    indent=2,
+                )
+                return True
+            return False
 
         if not solution.routes:
             return False
